@@ -12,7 +12,7 @@ print("TensorFlow version:", tf.__version__)
 from tensorflow.keras.layers import Dense, Convolution1D, LSTM, Flatten
 from tensorflow.keras.layers import BatchNormalization, Dropout, Concatenate
 from tensorflow.keras.models import Model
-
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from keras.metrics import AUC
@@ -20,7 +20,7 @@ from keras.metrics import AUC
 
 def retrieve_data(csv_dir):
     # feature csv locations, genomic info is stored in the clinical info csv
-    clinical_info = pd.read_csv(os.path.join(csv_dir, '../UPENN-GBM_clinical_info_v1.0.csv')
+    clinical_info = pd.read_csv(os.path.join(csv_dir, '../UPENN-GBM_clinical_info_v1.0.csv'))
     
     # maybe useful in the future, pulls all modalities and stores them into a dictionary of DataFrames 
     features_csvs = [os.path.join(csv_dir, f) for f in os.listdir(csv_dir) if f.endswith('.csv')]
@@ -143,53 +143,84 @@ def retrieve_data(csv_dir):
                     axis=0,
                     inplace=True)
 
+    # feature selection, dropping unneeded features
+    feature_to_remove = ['_OrientedBoundingBoxSize',
+                         '_PerimeterOnBorder',
+                         '_PixelsOnBorder',
+                         'Bins-16_Maximum',
+                         'Bins-16_Minimum',
+                         'Bins-16_Range']
+
+    feature_mask = t1_mgmt_df.columns.str.contains('|'.join(feature_to_remove))
+    feature_column_names = t1_mgmt_df.loc[:, feature_mask].columns.tolist()
+    # Don't use difference, it shuffles the columns
+    t1_mgmt_df.drop(feature_column_names, axis=1, inplace=True)
+    t1_man_mgmt_df.drop(feature_column_names, axis=1, inplace=True)
+    t1_comb_mgmt_df.drop(feature_column_names, axis=1, inplace=True)
+
     return t1_mgmt_df, t1_man_mgmt_df, t1_comb_mgmt_df
 
 
-######################################################################################
+#######################################################################################
 # split df into X and y set
 def scale_and_split(df, n_cat=2):
     """
-    splits and scales input dataframe and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
+    splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
     """
-    # separate out the inputs and labels 
+    # separate out the inputs and lab#els 
     y = df.iloc[:, :n_cat]
     X = df.iloc[:, n_cat:]
-    
+
     X_column_names = X.columns.tolist()
     X_pat_ids = X.index.tolist()
     y_column_names = y.columns.tolist()
     y_pat_ids = y.index.tolist()
-    
     # make a mask separating out tumor sections
-    ed_mask = X.columns.str.contains('.*_ED_.*')
-    et_mask = X.columns.str.contains('.*_ET_.*')
-    nc_mask = X.columns.str.contains('.*_NC_.*')
+    ed_mask = X.columns.str.contains('_ED_', regex=False)
+    et_mask = X.columns.str.contains('_ET_', regex=False)
+    nc_mask = X.columns.str.contains('_NC_', regex=False)
     
     # scale X data to 0 mean and unit variance (standard scaling)
     scaler = StandardScaler()
-    scaler.fit(X)
-    X_scaled = scaler.transform(X)
-    
+    X_scaled = scaler.fit_transform(X)
+
     # need to nest the tumor section features into three groups per patient
     X_scaled_ed = X_scaled[:, ed_mask]
     X_scaled_et = X_scaled[:, et_mask]
     X_scaled_nc = X_scaled[:, nc_mask]
+
     data_comb = np.array([[ed, et, nc] for ed, et, nc in zip(X_scaled_ed, X_scaled_et, X_scaled_nc)])
-    X_scaled = data_comb
+    X_scaled_comb = data_comb
     
     # add extra empty dimension so the conv1D wont yell at us
-    X_scaled = np.expand_dims(X_scaled, axis=3)
+    X_scaled_comb_extradim = np.expand_dims(X_scaled_comb, axis=3)
     y = y.to_numpy()
     
     # Separate into train and test datasets.
     # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.3, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled_comb_extradim, y, test_size=0.3, random_state=42, stratify=y)
     
     #X_train = X_train[:-2] # remove some patients so it is divisble by 11
     #y_train = y_train[:-2]
 
-    return X_train, X_test, y_train, y_test
+    return X_train, X_test, y_train, y_test, X_scaled, y
+
+
+
+def get_pc(df, components=0.9):
+    pca = PCA(n_components=components, random_state=42)
+    df_transform = pca.fit_transform(df)
+    return df_transform, pca
+
+
+def drop_corr(df, corr_cut = 0.9)
+    corr_df = df.corr().abs()
+    upper_mask = np.triu(np.ones_like(corr_df, dtype=bool))
+    upper_corr_df = corr_df.mask(upper_mask)
+    col_to_drop = [c for c in upper_corr_df.columns if np.any(upper_corr_df[c] > corr_cut)]
+
+    df_reduced = df.drop(col_to_drop, axis=1)
+    return df_reduced, col_to_drop
 
 
 def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, dense_active=True, batchnorm=True, batchmomentum=0.6):
@@ -366,21 +397,21 @@ if __name__ == '__main__':
     config_file = 'config_initial_20221228.json'
     history, model = run_model(config_file, X_train_adj, y_train_adj)
     
-    y_pred = model.predict(X_test_adj, batch_size=n_batch)
-    y_pred_train = model.predict(X_train, batch_size=n_batch)
-    auc = AUC()
-    auc.update_state(y_test_adj, y_pred)
-    print(auc.result())
-    auc_train = AUC()
-    auc_train.update_state(y_train, y_pred_train)
-    print(auc_train.result())
-    
-    results_test = model.evaluate(X_test_adj, y_test_adj, batch_size=n_batch)
-    results_train = model.evaluate(X_train, y_train, batch_size=n_batch)
-    model.save(logdir)
-    print('evaluate on test data')
-    print('test loss, test acc, test auc:', results_test)
-    print('evaluate on train data')
-    print('train loss, train acc, train auc:', results_train)
+    #y_pred = model.predict(X_test_adj, batch_size=n_batch)
+    #y_pred_train = model.predict(X_train, batch_size=n_batch)
+    #auc = AUC()
+    #auc.update_state(y_test_adj, y_pred)
+    #print(auc.result())
+    #auc_train = AUC()
+    #auc_train.update_state(y_train, y_pred_train)
+    #print(auc_train.result())
+    #
+    #results_test = model.evaluate(X_test_adj, y_test_adj, batch_size=n_batch)
+    #results_train = model.evaluate(X_train, y_train, batch_size=n_batch)
+    #model.save(logdir)
+    #print('evaluate on test data')
+    #print('test loss, test acc, test auc:', results_test)
+    #print('evaluate on train data')
+    #print('train loss, train acc, train auc:', results_train)
 
 
