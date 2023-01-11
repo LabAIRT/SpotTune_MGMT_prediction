@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os, json
+from datetime import datetime
 import tensorflow as tf
 print("TensorFlow version:", tf.__version__)
 from tensorflow.keras.models import Model
@@ -21,7 +22,75 @@ def run_model(config_file, X_train, y_train, components):
     # for separate tumor sections
     #Inputs = tf.keras.Input(shape=(3,components,1), batch_size=n_batch)
     #for combined tumor sections
-    Inputs = tf.keras.Input(shape=(components,1), batch_size=n_batch)
+    Inputs = tf.keras.Input(shape=(components,3), batch_size=n_batch)
+    #Inputs = tf.keras.Input(shape=(components,1), batch_size=n_batch)
+
+    model = train_model_comb(Inputs, dropout_rate=dropout, rec_active=False, dense_active=True, conv_active=True)
+    #model = train_model(Inputs, dropout_rate=dropout, rec_active=False, dense_active=True, conv_active=True)
+
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+                  loss='binary_crossentropy',
+                  metrics=['accuracy', 'AUC'])
+    print(model.summary())
+    logdir = os.path.join('logs', datetime.now().strftime("%Y%m%d-%H%M%S"))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
+
+    history = model.fit(X_train, 
+              y_train,
+              batch_size=n_batch,
+              epochs=n_epochs,
+              validation_split=0.25,
+              verbose=1,
+              callbacks=[tensorboard_callback])
+
+    return history, model, logdir
+
+
+def run_image_model(config_file, X_train, y_train):
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+
+    n_batch = config['n_batch']
+    n_epochs = config['n_epochs']
+    learning_rate = config['learning_rate']
+    dropout = config['dropout']
+
+    Inputs = tf.keras.Input(shape=(3,155,240,240,1), batch_size=n_batch)
+
+    model = train_model_image(Inputs, dropout_rate=dropout)
+
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+                  loss='binary_crossentropy',
+                  metrics=['accuracy', 'AUC'])
+
+    print(model.summary())
+    logdir = os.path.join('logs', datetime.now().strftime("%Y%m%d-%H%M%S"))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
+
+    history = model.fit(X_train, 
+              y_train,
+              batch_size=n_batch,
+              epochs=n_epochs,
+              validation_split=0.25,
+              verbose=1,
+              callbacks=[tensorboard_callback])
+
+    return history, model, logdir
+
+
+def run_image_radiomic_model(config_file, X_train, y_train, components):
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+
+    n_batch = config['n_batch']
+    n_epochs = config['n_epochs']
+    learning_rate = config['learning_rate']
+    dropout = config['dropout']
+
+    # set up the keras Input object, shape corresponds to the 3x144 array per patient in X_scaled
+    # for separate tumor sections
+    Inputs = tf.keras.Input(shape=(6,None,None), batch_size=n_batch)
+    #for combined tumor sections
 
     model = train_model_comb(Inputs, dropout_rate=dropout, rec_active=False, dense_active=True, conv_active=True)
 

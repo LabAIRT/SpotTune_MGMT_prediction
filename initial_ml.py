@@ -1,4 +1,4 @@
-#/usr/bin/env python
+#!/usr/bin/env python
 
 import os, json
 from datetime import datetime
@@ -18,7 +18,7 @@ from sklearn.model_selection import train_test_split
 from keras.metrics import AUC
 
 
-def retrieve_data(csv_dir):
+def retrieve_data(csv_dir, modality='T2'):
     # feature csv locations, genomic info is stored in the clinical info csv
     clinical_info = pd.read_csv(os.path.join(csv_dir, '../UPENN-GBM_clinical_info_v1.0.csv'))
     
@@ -32,9 +32,9 @@ def retrieve_data(csv_dir):
         features_dfs[f].set_index('SubjectID', inplace=True)
     
             # quick (and dirty) way of pulling specific modality dfs and storing them separately
-    search_key_ed = '_automaticsegm_T1_ED'
-    search_key_et = '_automaticsegm_T1_ET'
-    search_key_nc = '_automaticsegm_T1_NC'
+    search_key_ed = '_automaticsegm_'+modality+'_ED'
+    search_key_et = '_automaticsegm_'+modality+'_ET'
+    search_key_nc = '_automaticsegm_'+modality+'_NC'
     t1_segm_ed = [df for key, df in features_dfs.items() if search_key_ed in key][0]
     t1_segm_et = [df for key, df in features_dfs.items() if search_key_et in key][0]
     t1_segm_nc = [df for key, df in features_dfs.items() if search_key_nc in key][0]
@@ -84,9 +84,9 @@ def retrieve_data(csv_dir):
     #################################################################################
         
     # pulling the manually refined segmentation data
-    search_key_ed = '_segm_T1_ED'
-    search_key_et = '_segm_T1_ET'
-    search_key_nc = '_segm_T1_NC'
+    search_key_ed = '_segm_'+modality+'_ED'
+    search_key_et = '_segm_'+modality+'_ET'
+    search_key_nc = '_segm_'+modality+'_NC'
     t1_man_segm_ed = [df for key, df in features_dfs.items() if search_key_ed in key][0]
     t1_man_segm_et = [df for key, df in features_dfs.items() if search_key_et in key][0]
     t1_man_segm_nc = [df for key, df in features_dfs.items() if search_key_nc in key][0]
@@ -142,6 +142,10 @@ def retrieve_data(csv_dir):
     t1_mgmt_df.drop(labels=to_drop,
                     axis=0,
                     inplace=True)
+    to_drop = t1_comb_mgmt_df[t1_comb_mgmt_df.isnull().any(axis=1)].index.tolist()
+    t1_comb_mgmt_df.drop(labels=to_drop,
+                    axis=0,
+                    inplace=True)
 
     # feature selection, dropping unneeded features
     feature_to_remove = ['_OrientedBoundingBoxSize',
@@ -163,12 +167,12 @@ def retrieve_data(csv_dir):
 
 #######################################################################################
 # split df into X and y set
-def scale_and_split(df, n_cat=2):
+def scale_and_split(df, do_pca=False, do_corr=False, n_cat=2):
     """
     splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
     """
     # separate out the inputs and lab#els 
-    y = df.iloc[:, :n_cat]
+    y = df.iloc[:, :1]
     X = df.iloc[:, n_cat:]
 
     X_column_names = X.columns.tolist()
@@ -189,9 +193,26 @@ def scale_and_split(df, n_cat=2):
     X_scaled_et = X_scaled[:, et_mask]
     X_scaled_nc = X_scaled[:, nc_mask]
 
-    data_comb = np.array([[ed, et, nc] for ed, et, nc in zip(X_scaled_ed, X_scaled_et, X_scaled_nc)])
+    # apply pca to reduce dimensionality
+    # need to figure out how to get this to work with a jagged array
+    if do_pca:
+        X_ed_reduced, comp_ed = get_pc(X_scaled_ed)
+        n_components = comp_ed.n_components_
+        X_et_reduced, comp_et = get_pc(X_scaled_et, n_components)
+        X_nc_reduced, comp_nc = get_pc(X_scaled_nc, n_components)
+    elif do_corr:
+        X_ed_reduced, comp_ed = drop_corr(X_scaled_ed)
+        X_et_reduced, comp_et = drop_corr(X_scaled_et)
+        X_nc_reduced, comp_nc = drop_corr(X_scaled_nc)
+    else:
+        X_ed_reduced = X_scaled_ed
+        X_et_reduced = X_scaled_et
+        X_nc_reduced = X_scaled_nc
+
+    data_comb = np.array([[ed, et, nc] for ed, et, nc in zip(X_ed_reduced, X_et_reduced, X_nc_reduced)])
     X_scaled_comb = data_comb
     
+
     # add extra empty dimension so the conv1D wont yell at us
     X_scaled_comb_extradim = np.expand_dims(X_scaled_comb, axis=3)
     y = y.to_numpy()
@@ -203,24 +224,134 @@ def scale_and_split(df, n_cat=2):
     #X_train = X_train[:-2] # remove some patients so it is divisble by 11
     #y_train = y_train[:-2]
 
-    return X_train, X_test, y_train, y_test, X_scaled, y
+    return X_train, X_test, y_train, y_test, X_scaled, y, n_components
 
 
 
-def get_pc(df, components=0.9):
+def get_pc(df, components=0.1):
     pca = PCA(n_components=components, random_state=42)
     df_transform = pca.fit_transform(df)
     return df_transform, pca
 
 
-def drop_corr(df, corr_cut = 0.9)
+def drop_corr(df, corr_cut = 0.4):
     corr_df = df.corr().abs()
     upper_mask = np.triu(np.ones_like(corr_df, dtype=bool))
     upper_corr_df = corr_df.mask(upper_mask)
     col_to_drop = [c for c in upper_corr_df.columns if np.any(upper_corr_df[c] > corr_cut)]
 
     df_reduced = df.drop(col_to_drop, axis=1)
-    return df_reduced, col_to_drop
+    return df_reduced, len(df_reduced.columns)
+
+
+
+def scale_and_split_comb(df, do_pca=False, do_corr=False, n_cat=2):
+    """
+    splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
+    """
+    # separate out the inputs and lab#els 
+    y = df.iloc[:, :1]
+    X = df.iloc[:, n_cat:]
+
+    # scale X data to 0 mean and unit variance (standard scaling)
+    scaler = StandardScaler()
+
+    # apply pca to reduce dimensionality
+    # need to figure out how to get this to work with a jagged array
+    if do_pca:
+        X_scaled = scaler.fit_transform(X)
+        X_reduced, comp = get_pc(X_scaled)
+        n_components = comp.n_components_
+    elif do_corr:
+        X_reduced, comp = drop_corr(X)
+        n_components = comp
+        X_scaled = scaler.fit_transform(X_reduced)
+        X_reduced = X_scaled
+    else:
+        X_reduced = X_scaled
+        n_components = len(X_reduced[0])
+
+    # add extra empty dimension so the conv1D wont yell at us
+    X_scaled_extradim = np.expand_dims(X_reduced, axis=2)
+    y = y.to_numpy()
+    
+    # Separate into train and test datasets.
+    # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled_extradim, y, test_size=0.3, random_state=42, stratify=y)
+    
+    #X_train = X_train[:-2] # remove some patients so it is divisble by 11
+    #y_train = y_train[:-2]
+
+    return X_train, X_test, y_train, y_test, X_scaled, y, n_components
+
+
+
+def train_model_comb(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, dense_active=True, batchnorm=True, batchmomentum=0.6):
+    """
+    Inputs: data inputs
+    dropout_rate: Dropout rate
+    conv_active: activate CNN layers
+    dens_active: activate Dense layers
+    batchnorm: do BatchNormalization
+    batchmomentum: momentum to give to BatchNormalization
+    """
+
+    ed = BatchNormalization(momentum=batchmomentum, name='ed_input_batchnorm')(Inputs)
+
+    # put CNN layers into active statement so they can be turned on/off
+    if conv_active:
+        ed = Convolution1D(64, 1, kernel_initializer='lecun_uniform', activation='relu', name='ed_conv0')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='ed_batchnorm0')(ed)
+        ed = Dropout(dropout_rate, name='ed_dropout0')(ed)
+        ed = Convolution1D(32, 1, kernel_initializer='lecun_uniform', activation='relu', name='ed_conv1')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='ed_batchnorm1')(ed)
+        ed = Dropout(dropout_rate, name='ed_dropout1')(ed)
+        ed = Convolution1D(32, 1, kernel_initializer='lecun_uniform', activation='relu', name='ed_conv2')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='ed_batchnorm2')(ed)
+        ed = Dropout(dropout_rate, name='ed_dropout2')(ed)
+        ed = Convolution1D(8, 1, kernel_initializer='lecun_uniform', activation='relu', name='ed_conv3')(ed)
+
+    else:
+        ed = Convolution1D(1, 1, kernel_initializer='zeros', trainable=False, name='ed_conv_off')(ed)
+
+    # Now the Recurrent LSTM layers
+    if rec_active:
+        ed = LSTM(150, go_backwards=True, implementation=2, name='ed_lstm')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='ed_lstm_batchnorm')(ed)
+        ed = Dropout(dropout_rate, name='ed_lstm_dropout')(ed)
+    else:
+        ed = Flatten()(ed)
+
+    # Now Dense Layer(s)
+    if dense_active:
+        ed = Dense(100, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense0')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm0')(ed)
+        ed = Dropout(dropout_rate, name='df_dense_dropout0')(ed)
+        ed = Dense(50, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense1')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm1')(ed)
+        ed = Dropout(dropout_rate, name='df_dense_dropout1')(ed)
+        ed = Dense(50, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense2')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm2')(ed)
+        ed = Dropout(dropout_rate, name='df_dense_dropout2')(ed)
+        ed = Dense(25, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense3')(ed)
+        if batchnorm:
+            ed = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm3')(ed)
+        ed = Dropout(dropout_rate, name='df_dense_dropout3')(ed)
+    else:
+        ed = Dense(100, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense_conv')(ed)
+
+    # output layer
+    pred = Dense(1, activation='sigmoid', kernel_initializer='lecun_uniform', name='ID_pred')(ed)
+
+    model = Model(Inputs, pred)
+    return model
 
 
 def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, dense_active=True, batchnorm=True, batchmomentum=0.6):
@@ -259,7 +390,7 @@ def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, den
         ed = Convolution1D(8, 1, kernel_initializer='lecun_uniform', activation='relu', name='ed_conv3')(ed)
 
         # Enhancing Tumor section
-        et = Convolution1D(64, 1, kernel_initializer='lecun_uniform', activation='relu', name='et_conv0')(et)
+        et = Convolution1D(32, 1, kernel_initializer='lecun_uniform', activation='relu', name='et_conv0')(et)
         if batchnorm:
             et = BatchNormalization(momentum=batchmomentum, name='et_batchnorm0')(et)
         et = Dropout(dropout_rate, name='et_dropout0')(et)
@@ -274,7 +405,7 @@ def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, den
         et = Convolution1D(8, 1, kernel_initializer='lecun_uniform', activation='relu', name='et_conv3')(et)
 
         # Necrotic Core Section
-        nc = Convolution1D(64, 1, kernel_initializer='lecun_uniform', activation='relu', name='nc_conv0')(nc)
+        nc = Convolution1D(32, 1, kernel_initializer='lecun_uniform', activation='relu', name='nc_conv0')(nc)
         if batchnorm:
             nc = BatchNormalization(momentum=batchmomentum, name='nc_batchnorm0')(nc)
         nc = Dropout(dropout_rate, name='nc_dropout0')(nc)
@@ -302,7 +433,7 @@ def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, den
         if batchnorm:
             et = BatchNormalization(momentum=batchmomentum, name='et_lstm_batchnorm')(et)
         et = Dropout(dropout_rate, name='et_lstm_dropout')(et)
-        nc = LSTM(150, go_backwards=True, implementation=2, name='nc_lstm')(nc)
+        nc = LSTM(100, go_backwards=True, implementation=2, name='nc_lstm')(nc)
         if batchnorm:
             nc = BatchNormalization(momentum=batchmomentum, name='nc_lstm_batchnorm')(nc)
         nc = Dropout(dropout_rate, name='nc_lstm_dropout')(nc)
@@ -318,11 +449,11 @@ def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, den
     x_comb = Concatenate()([ed,et,nc])
     # Now Dense Layer(s)
     if dense_active:
-        x_comb = Dense(200, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense0')(x_comb)
+        x_comb = Dense(100, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense0')(x_comb)
         if batchnorm:
             x_comb = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm0')(x_comb)
         x_comb = Dropout(dropout_rate, name='df_dense_dropout0')(x_comb)
-        x_comb = Dense(100, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense1')(x_comb)
+        x_comb = Dense(50, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense1')(x_comb)
         if batchnorm:
             x_comb = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm1')(x_comb)
         x_comb = Dropout(dropout_rate, name='df_dense_dropout1')(x_comb)
@@ -335,16 +466,16 @@ def train_model(Inputs, dropout_rate=0.1, conv_active=True, rec_active=True, den
             x_comb = BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm3')(x_comb)
         x_comb = Dropout(dropout_rate, name='df_dense_dropout3')(x_comb)
     else:
-        x_comb = Dense(100, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense_conv')(x_comb)
+        x_comb = Dense(50, activation='relu', kernel_initializer='lecun_uniform', name='comb_dense_conv')(x_comb)
 
     # output layer
-    pred = Dense(2, activation='sigmoid', kernel_initializer='lecun_uniform', name='ID_pred')(x_comb)
+    pred = Dense(1, activation='sigmoid', kernel_initializer='lecun_uniform', name='ID_pred')(x_comb)
 
     model = Model(Inputs, pred)
     return model
 
 
-def run_model(config_file, X_train, y_train):
+def run_model(config_file, X_train, y_train, components):
     with open(config_file, 'r') as f:
         config = json.load(f)
 
@@ -354,9 +485,13 @@ def run_model(config_file, X_train, y_train):
     dropout = config['dropout']
 
     # set up the keras Input object, shape corresponds to the 3x144 array per patient in X_scaled
-    Inputs = tf.keras.Input(shape=(3,144,1), batch_size=n_batch)
+    # for separate tumor sections
+    Inputs = tf.keras.Input(shape=(3,components,1), batch_size=n_batch)
+    #for combined tumor sections
+    #Inputs = tf.keras.Input(shape=(components,1), batch_size=n_batch)
 
-    model = train_model(Inputs, dropout_rate=dropout, rec_active=False, dense_active=False)
+    model = train_model(Inputs, dropout_rate=dropout, rec_active=False, dense_active=True, conv_active=True)
+    #model = train_model_comb(Inputs, dropout_rate=dropout, rec_active=False, dense_active=True, conv_active=True)
 
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
                   loss='binary_crossentropy',
@@ -369,10 +504,11 @@ def run_model(config_file, X_train, y_train):
               y_train,
               batch_size=n_batch,
               epochs=n_epochs,
+              validation_split=0.25,
               verbose=1,
               callbacks=[tensorboard_callback])
 
-    return history, model
+    return history, model, logdir
 
 
 if __name__ == '__main__':

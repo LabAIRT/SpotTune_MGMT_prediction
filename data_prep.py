@@ -5,13 +5,15 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import SimpleITK as sitk
 from collections import OrderedDict
 
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split, StratifiedKFold
 
 
-def retrieve_data(csv_dir):
+def retrieve_data(csv_dir, modality='T1'):
     # feature csv locations, genomic info is stored in the clinical info csv
     clinical_info = pd.read_csv(os.path.join(csv_dir, '../UPENN-GBM_clinical_info_v1.0.csv'))
     
@@ -25,9 +27,9 @@ def retrieve_data(csv_dir):
         features_dfs[f].set_index('SubjectID', inplace=True)
     
             # quick (and dirty) way of pulling specific modality dfs and storing them separately
-    search_key_ed = '_automaticsegm_T1_ED'
-    search_key_et = '_automaticsegm_T1_ET'
-    search_key_nc = '_automaticsegm_T1_NC'
+    search_key_ed = '_automaticsegm_'+modality+'_ED'
+    search_key_et = '_automaticsegm_'+modality+'_ET'
+    search_key_nc = '_automaticsegm_'+modality+'_NC'
     t1_segm_ed = [df for key, df in features_dfs.items() if search_key_ed in key][0]
     t1_segm_et = [df for key, df in features_dfs.items() if search_key_et in key][0]
     t1_segm_nc = [df for key, df in features_dfs.items() if search_key_nc in key][0]
@@ -77,9 +79,9 @@ def retrieve_data(csv_dir):
     #################################################################################
         
     # pulling the manually refined segmentation data
-    search_key_ed = '_segm_T1_ED'
-    search_key_et = '_segm_T1_ET'
-    search_key_nc = '_segm_T1_NC'
+    search_key_ed = '_segm_'+modality+'_ED'
+    search_key_et = '_segm_'+modality+'_ET'
+    search_key_nc = '_segm_'+modality+'_NC'
     t1_man_segm_ed = [df for key, df in features_dfs.items() if search_key_ed in key][0]
     t1_man_segm_et = [df for key, df in features_dfs.items() if search_key_et in key][0]
     t1_man_segm_nc = [df for key, df in features_dfs.items() if search_key_nc in key][0]
@@ -154,6 +156,49 @@ def retrieve_data(csv_dir):
     return t1_mgmt_df, t1_man_mgmt_df, t1_comb_mgmt_df
 
 
+
+def retrieve_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_GBM/images/NIfTI-files/', image_type='autosegm'):
+    """
+    retrieve images of selected image type corresponding to type of segmentation available
+    """
+
+    patients = patient_df.index.tolist()
+    autosegm_dir = os.path.join(image_dir_, 'automated_segm')
+    mansegm_dir = os.path.join(image_dir_, 'images_segm')
+    structural_dir = os.path.join(image_dir_, 'images_structural')
+
+    autosegm_paths = [os.path.join(r, d, f1) if len(d)>0 else os.path.join(r, f1) for r, d, f in os.walk(autosegm_dir) for f1 in f]
+    mansegm_paths = [os.path.join(r, d, f1) if len(d)>0 else os.path.join(r, f1) for r, d, f in os.walk(mansegm_dir) for f1 in f]
+    structural_paths = [os.path.join(r, d, f1) if len(d)>0 else os.path.join(r, f1) for r, d, f in os.walk(structural_dir) for f1 in f]
+
+    selected_autosegm_paths = {'_'.join(p.split('\\')[-1].split('.')[0].split('_')[:2]): p for p in autosegm_paths if '_'.join(p.split('\\')[-1].split('.')[0].split('_')[:2]) in patients}
+    selected_mansegm_paths = {'_'.join(p.split('\\')[-1].split('.')[0].split('_')[:2]): p for p in mansegm_paths if '_'.join(p.split('\\')[-1].split('.')[0].split('_')[:2]) in patients}
+    selected_structural_paths = {'_'.join(p.split('\\')[-1].split('.')[0].split('_')[:2]): p for p in structural_paths if ('_'.join(p.split('\\')[-1].split('.')[0].split('_')[:2]) in patients) and (modality+'.' in p)}
+
+    paths_df = pd.DataFrame(patient_df)
+    paths_df['autosegm_image_paths'] = paths_df.index.map(selected_autosegm_paths)
+    paths_df['mansegm_image_paths'] = paths_df.index.map(selected_mansegm_paths)
+    paths_df['structural_image_paths'] = paths_df.index.map(selected_structural_paths)
+
+    image_df = pd.DataFrame(patient_df)
+    image_df[['ED', 'ET', 'NC', 'Full']] = None
+
+    for pat, row in paths_df.iterrows():
+        mask = sitk.GetArrayFromImage(sitk.ReadImage(row['autosegm_image_paths'], sitk.sitkUInt16))
+        struct = sitk.GetArrayFromImage(sitk.ReadImage(row['structural_image_paths'], sitk.sitkUInt16))
+
+        image_df.at[pat, 'ED'] = np.where(mask==2, struct, 0)
+        image_df.at[pat, 'ET'] = np.where(mask==4, struct, 0)
+        image_df.at[pat, 'NC'] = np.where(mask==1, struct, 0)
+        image_df.at[pat, 'Full'] = np.where(mask>0, struct, 0)
+
+        del mask
+        del struct
+
+    return image_df
+
+
+
 #######################################################################################
 # split df into X and y set
 def scale_and_split(df, do_pca=False, do_corr=False, n_cat=1):
@@ -190,9 +235,9 @@ def scale_and_split(df, do_pca=False, do_corr=False, n_cat=1):
         X_et_reduced, comp_et = get_pc(X_scaled_et, n_components)
         X_nc_reduced, comp_nc = get_pc(X_scaled_nc, n_components)
     elif do_corr:
-        X_ed_reduced, comp_ed = drop_corr(X_scaled_ed)
-        X_et_reduced, comp_et = drop_corr(X_scaled_et)
-        X_nc_reduced, comp_nc = drop_corr(X_scaled_nc)
+        X_ed_reduced, ed_col, comp_ed = drop_corr(X_scaled_ed)
+        X_et_reduced, et_col, comp_et = drop_corr(X_scaled_et)
+        X_nc_reduced, nc_col, comp_nc = drop_corr(X_scaled_nc)
     else:
         X_ed_reduced = X_scaled_ed
         X_et_reduced = X_scaled_et
@@ -214,6 +259,77 @@ def scale_and_split(df, do_pca=False, do_corr=False, n_cat=1):
     #y_train = y_train[:-2]
 
     return X_train, X_test, y_train, y_test, X_scaled, y, n_components
+
+
+
+def scale_and_split_rgb(df, do_pca=False, do_corr=False, n_cat=1):
+    """
+    splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
+    """
+    # separate out the inputs and lab#els 
+    y = df.iloc[:, :n_cat]
+    X = df.iloc[:, n_cat:]
+
+    X_column_names = X.columns.tolist()
+    X_pat_ids = X.index.tolist()
+    y_column_names = y.columns.tolist()
+    y_pat_ids = y.index.tolist()
+    # make a mask separating out tumor sections
+    ed_mask = X.columns.str.contains('_ED_', regex=False)
+    et_mask = X.columns.str.contains('_ET_', regex=False)
+    nc_mask = X.columns.str.contains('_NC_', regex=False)
+    
+    # scale X data to 0 mean and unit variance (standard scaling)
+    scaler = StandardScaler()
+    #X_scaled = scaler.fit_transform(X)
+
+    # need to nest the tumor section features into three groups per patient
+    X_ed = X.iloc[:, ed_mask]
+    X_et = X.iloc[:, et_mask]
+    X_nc = X.iloc[:, nc_mask]
+    # apply pca to reduce dimensionality
+    # need to figure out how to get this to work with a jagged array
+    if do_pca:
+        X_scaled_ed = scaler.fit_transform(X_ed)
+        X_scaled_et = scaler.fit_transform(X_et)
+        X_scaled_nc = scaler.fit_transform(X_nc)
+
+        X_reduced_ed, comp_ed = get_pc(X_scaled_ed)
+        n_components = comp_ed.n_components_
+        X_reduced_et, comp_et = get_pc(X_scaled_et, n_components)
+        X_reduced_nc, comp_nc = get_pc(X_scaled_nc, n_components)
+    elif do_corr:
+        X_reduced_ed, col_to_drop, comp_ed = drop_corr(X_ed)
+        et_col_to_drop = [c.replace('_ED_', '_ET_') for c in col_to_drop]
+        nc_col_to_drop = [c.replace('_ED_', '_NC_') for c in col_to_drop]
+        X_reduced_et = X_et.drop(et_col_to_drop, axis=1)
+        X_reduced_nc = X_nc.drop(nc_col_to_drop, axis=1)
+
+        X_reduced_ed = scaler.fit_transform(X_reduced_ed)
+        X_reduced_et = scaler.fit_transform(X_reduced_et)
+        X_reduced_nc = scaler.fit_transform(X_reduced_nc)
+        n_components = comp_ed
+
+    else:
+        X_reduced = X_scaled_comb
+        n_components = len(X_reduced[0])
+
+    data_comb = np.array([[ed, et, nc] for ed, et, nc in zip(X_reduced_ed, X_reduced_et, X_reduced_nc)])
+    X_reduced_comb = data_comb
+    X_reduced = np.transpose(X_reduced_comb, axes=[0, 2, 1])
+
+    
+    # add extra empty dimension so the conv1D wont yell at us
+    y = y.to_numpy()
+    
+    # Separate into train and test datasets.
+    # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
+    X_train, X_test, y_train, y_test = train_test_split(X_reduced, y, test_size=0.3, random_state=42, stratify=y)
+    
+    #X_train = X_train[:-2] # remove some patients so it is divisble by 11
+    #y_train = y_train[:-2]
+
+    return X_train, X_test, y_train, y_test, X, y, n_components
 
 
 
@@ -257,19 +373,99 @@ def scale_and_split_comb(df, do_pca=False, do_corr=False, n_cat=1):
     return X_train, X_test, y_train, y_test, X_scaled, y, n_components
 
 
-def get_pc(df, components=0.9):
+def split_image(df, do_pca=False, do_corr=False, n_cat=1):
+    """
+    splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
+    """
+    # separate out the inputs and lab#els 
+    y = df.iloc[:, :n_cat]
+    X = df.iloc[:, n_cat:-1]
+
+    y = y.to_numpy()
+    
+    # Separate into train and test datasets.
+    # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+    
+    #X_train = X_train[:-2] # remove some patients so it is divisble by 11
+    #y_train = y_train[:-2]
+
+    return X_train, X_test, y_train, y_test, X_scaled, y, n_components
+
+
+def get_pc(df, components=0.2):
     pca = PCA(n_components=components, random_state=42)
     df_transform = pca.fit_transform(df)
     return df_transform, pca
 
 
-def drop_corr(df, corr_cut = 0.5):
+def drop_corr(df, corr_cut = 0.8):
     corr_df = df.corr().abs()
     upper_mask = np.triu(np.ones_like(corr_df, dtype=bool))
     upper_corr_df = corr_df.mask(upper_mask)
     col_to_drop = [c for c in upper_corr_df.columns if np.any(upper_corr_df[c] > corr_cut)]
 
     df_reduced = df.drop(col_to_drop, axis=1)
-    return df_reduced, len(df_reduced.columns)
+    return df_reduced, col_to_drop, len(df_reduced.columns)
+
+
+
+def split_image(df, do_pca=False, do_corr=False, n_cat=1):
+    """
+    splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
+    """
+    # separate out the inputs and lab#els 
+    y = df.iloc[:, :n_cat]
+    X = df.iloc[:, n_cat:-1]
+
+    y = y.to_numpy()
+    
+    # Separate into train and test datasets.
+    # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled_comb_extradim, y, test_size=0.3, random_state=42, stratify=y)
+    
+    #X_train = X_train[:-2] # remove some patients so it is divisble by 11
+    #y_train = y_train[:-2]
+
+    return X_train, X_test, y_train, y_test, X_scaled, y, n_components
+
+
+def write_scale_values(df, out_file_='image_scaling'):
+    #ed_mean = np.mean(df['ED'].tolist())
+    #et_mean = np.mean(df['ET'].tolist())
+    #nc_mean = np.mean(df['NC'].tolist())
+    #full_mean = np.mean(df['Full'].tolist())
+
+    #ed_std = np.std(df['ED'].tolist())
+    #et_std = np.std(df['ET'].tolist())
+    #nc_std = np.std(df['NC'].tolist())
+    #full_std = np.std(df['Full'].tolist())
+
+    ed_max = int(np.max(df['ED'].tolist()))
+    et_max = int(np.max(df['ET'].tolist()))
+    nc_max = int(np.max(df['NC'].tolist()))
+    full_max = int(np.max(df['Full'].tolist()))
+
+
+    scaling_dict = {
+                     #'ED_mean': ed_mean,
+                     #'ET_mean': et_mean,
+                     #'NC_mean': nc_mean,
+                     #'Full_mean': full_mean,
+                     #'ED_std': ed_std,
+                     #'ET_std': et_std,
+                     #'NC_std': nc_std,
+                     #'Full_std': full_std,
+                     'ED_max': ed_max,
+                     'ET_max': et_max,
+                     'NC_max': nc_max,
+                     'Full_max': full_max}
+
+    file_name = out_file_+'_'+datetime.now().strftime("%Y%m%d-%H%M%S")+'.json'
+
+    with open(file_name, 'w') as json_out:
+        json.dump(scaling_dict, json_out)
+
+    return file_name
 
 
