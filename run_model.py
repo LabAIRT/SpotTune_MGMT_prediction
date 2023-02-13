@@ -3,7 +3,6 @@
 import os, json
 from datetime import datetime
 import tensorflow as tf
-print("TensorFlow version:", tf.__version__)
 from tensorflow.keras.models import Model
 
 from sklearn.utils.class_weight import compute_class_weight
@@ -66,6 +65,9 @@ def run_image_model(X_train, X_val, y_train, y_val):
     dropout = model_config['dropout']
     batch_momentum = model_config['batch_momentum']
     op_momentum = model_config['op_momentum']
+    dilation = model_config['dilation']
+    l2_reg = model_config['l2_reg']
+
     if gen_params['to_augment']:
         steps_per_epoch = len(X_train)*(len(gen_params['augment_types'])+1) // batch_size
     else:
@@ -93,9 +95,11 @@ def run_image_model(X_train, X_val, y_train, y_val):
     #Inputs = tf.keras.Input(shape=(70,86,82,3), batch_size=batch_size)
 
     #model = train_model_sequential(Inputs, dropout_rate=dropout)
-    model = train_model_resnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
+    model = train_model_resnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=l2_reg, dilation=dilation)
+    #model = train_model_alexnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
+    #model = train_model_lungnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=0.00001)
     #model = train_model_resnet34(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
-
+    model.build(Inputs)
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
     #model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=op_momentum),
     #model.compile(optimizer=tf.keras.optimizers.Adamax(learning_rate=learning_rate),
@@ -109,7 +113,7 @@ def run_image_model(X_train, X_val, y_train, y_val):
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
     early_stopping_monitor = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-    model_checkpoint = tf.keras.callbacks.ModelCheckpoint(os.path.join(logdir, 'model_{epoch:03d}_{accuracy:0.2f}_{val_accuracy:0.2f}'), 
+    model_checkpoint = tf.keras.callbacks.ModelCheckpoint(os.path.join(logdir, 'model_{epoch:03d}_{accuracy:0.2f}_{val_accuracy:0.2f}_{val_auc:0.2f}.h5'), 
                                                           save_best_only=True, monitor='val_accuracy', verbose=0)
 
     #y_train_labels = y_train.iloc[:, 0].replace([1, 0], ['Methylated', 'Unmethylated'])

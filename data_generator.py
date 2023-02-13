@@ -5,15 +5,15 @@ import pandas as pd
 import tensorflow as tf
 from skimage.util import random_noise
 from skimage.transform import rotate
-
+from sklearn.preprocessing import StandardScaler
 import elasticdeform
-
+from gbm_project.data_prep import retrieve_data 
 
 class DataGenerator(tf.keras.utils.Sequence):
     """
     Generate data for a Keras model
     """
-    def __init__(self, data_indices, labels, data_dir='../../data/upenn_GBM/images/NIfTI-files/', modality='T2', batch_size=11, dim=(155, 240, 240), n_channels=1, n_classes=2, shuffle=True, to_augment=False, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42):
+    def __init__(self, data_indices, labels, csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', data_dir='../../data/upenn_GBM/images/NIfTI-files/', modality='T2', batch_size=11, dim=(155, 240, 240), n_channels=1, n_classes=2, shuffle=True, to_augment=False, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, to_encode=False):
         """
         Initialization
         """
@@ -28,9 +28,24 @@ class DataGenerator(tf.keras.utils.Sequence):
         self.rng_noise = np.random.default_rng(seed)
         self.rng_rotate = np.random.default_rng(seed)
         self.data_dir = data_dir
+        self.csv_dir = csv_dir
         self.modality = modality
         self.to_augment = to_augment
         self.augment_types = augment_types
+        self.to_encode = to_encode
+        self.radiomics = None
+
+        if self.to_encode:
+            temp_radiomics = retrieve_data(self.csv_dir, self.modality)[0]
+            self.radiomics = temp_radiomics.loc[self.data_indices, 2:]
+            scaler = StandardScaler()
+
+            temp_index = self.radiomics.index.tolist()
+            temp_column = self.radiomics.columns.tolist()
+            temp_scaled = scaler.fit_transform(self.radiomics)
+
+            self.radiomics = pd.DataFrame(temp_scaled, columns=temp_column, index=temp_index)
+
 
         if self.to_augment:
             augment_idx = {}
@@ -133,10 +148,28 @@ class DataGenerator(tf.keras.utils.Sequence):
         return np.flip(arr, axis=(0,1,2))
 
 
+    def encode(self, arr, idx):
+        arr.append(np.zeros((self.dim[1], self.dim[2], self.n_channels)), axis=0)
+
+        ed_arr = self.radiomics.loc[idx].iloc[:, self.radiomics.columns.str.contains('_ED_', regex=False)] 
+        et_arr = self.radiomics.loc[idx].iloc[:, self.radiomics.columns.str.contains('_ET_', regex=False)] 
+        nc_arr = self.radiomics.loc[idx].iloc[:, self.radiomics.columns.str.contains('_NC_', regex=False)] 
+
+        ed_arr = ed_arr.reshape((15,9))
+        et_arr = et_arr.reshape((15,9))
+        nc_arr = nc_arr.reshape((15,9))
+
+        arr[-1, (43-7):(41+8), (41-4):(41+5), 0] = ed_arr
+        arr[-1, (43-7):(41+8), (41-4):(41+5), 1] = et_arr
+        arr[-1, (43-7):(41+8), (41-4):(41+5), 2] = nc_arr
+
+        return arr
+
+
 
 def data_generator(data_indices, labels, data_dir='../../data/upenn_GBM/images/NIfTI-files/', modality='T2', batch_size=8, dim=(155, 240, 240), n_channels=1, n_classes=2, shuffle=True, seed=42):
     """
-    generator function that doesn't rely on keras Sequence() for forked training
+    generator function that doesn't rely on keras Sequence() for multi-input training
     """
 
     rng = np.random.default_rng(seed)

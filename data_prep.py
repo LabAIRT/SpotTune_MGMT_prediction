@@ -208,7 +208,7 @@ def retrieve_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_
     return image_df
 
 
-def convert_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_GBM/images/NIfTI-files/', out_dir='../../data/upenn_GBM/numpy_conversion', image_type='autosegm', scale_file='image_scaling_T2.json', window=(64, 80, 60), base_dim=(155,240,240), downsample=False, window_idx = ((0, 140), (39, 211), (44,208)), down_factor=0.5): 
+def convert_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_GBM/images/NIfTI-files/', out_dir='../../data/upenn_GBM/numpy_conversion', image_type='autosegm', scale_file='image_scaling_T2.json', window=(140, 172, 164), pad_window=(86, 86, 86), base_dim=(155,240,240), downsample=False, window_idx = ((0, 140), (39, 211), (44,208)), down_factor=0.5): 
     """
     Based on a provided directory, retrieve images and save them as npy files to be used by a data generator
     """
@@ -271,10 +271,13 @@ def convert_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_G
             et_arr = et_arr[window_idx[0][0]:window_idx[0][1], window_idx[1][0]:window_idx[1][1], window_idx[2][0]:window_idx[2][1]]
             nc_arr = nc_arr[window_idx[0][0]:window_idx[0][1], window_idx[1][0]:window_idx[1][1], window_idx[2][0]:window_idx[2][1]]
             full_arr = full_arr[window_idx[0][0]:window_idx[0][1], window_idx[1][0]:window_idx[1][1], window_idx[2][0]:window_idx[2][1]]
+            struct = struct[window_idx[0][0]:window_idx[0][1], window_idx[1][0]:window_idx[1][1], window_idx[2][0]:window_idx[2][1]]
             ed_arr = rescale(ed_arr, down_factor)
             et_arr = rescale(et_arr, down_factor)
             nc_arr = rescale(nc_arr, down_factor)
             full_arr = rescale(full_arr, down_factor)
+            struct = rescale(struct, down_factor)
+
         else:
             # get index range for a 64x80x60 window around the center of mass of the image
             full_com = center_of_mass(full_arr)
@@ -326,6 +329,7 @@ def convert_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_G
             et_arr = et_arr[low_idx_0:high_idx_0, low_idx_1:high_idx_1, low_idx_2:high_idx_2]
             nc_arr = nc_arr[low_idx_0:high_idx_0, low_idx_1:high_idx_1, low_idx_2:high_idx_2]
             full_arr = full_arr[low_idx_0:high_idx_0, low_idx_1:high_idx_1, low_idx_2:high_idx_2]
+            struct = struct[low_idx_0:high_idx_0, low_idx_1:high_idx_1, low_idx_2:high_idx_2]
 
         # min max scaling with min of 0 -> (arr - min) / (max - min)
         #ed_arr = ed_arr / ed_max
@@ -338,13 +342,44 @@ def convert_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_G
         et_arr = et_arr / np.max(et_arr)
         nc_arr = nc_arr / np.max(nc_arr)
         full_arr = full_arr / np.max(full_arr)
+        struct = struct / np.max(struct)
 
 
 
         full_shape = np.shape(full_arr)
-        if full_shape != window:
-            print('fix failed')
-            print(full_shape, window)
+        if full_shape != pad_window:
+
+            difference_axis_0 = abs(full_shape[0]-pad_window[0])
+            difference_axis_1 = abs(full_shape[1]-pad_window[1])
+            difference_axis_2 = abs(full_shape[2]-pad_window[2])
+
+            split_axis_0 = difference_axis_0 // 2
+            rem_axis_0 = difference_axis_0 % 2
+            split_axis_1 = difference_axis_1 // 2
+            rem_axis_1 = difference_axis_1 % 2
+            split_axis_2 = difference_axis_2 // 2
+            rem_axis_2 = difference_axis_2 % 2
+
+            ed_arr = np.pad(ed_arr, pad_width=((split_axis_0, split_axis_0+rem_axis_0), 
+                                               (split_axis_1, split_axis_1+rem_axis_1),
+                                               (split_axis_2, split_axis_2+rem_axis_2)), 
+                                               mode='constant', constant_values=0)
+            et_arr = np.pad(et_arr, pad_width=((split_axis_0, split_axis_0+rem_axis_0), 
+                                               (split_axis_1, split_axis_1+rem_axis_1),
+                                               (split_axis_2, split_axis_2+rem_axis_2)),
+                                               mode='constant', constant_values=0)
+            nc_arr = np.pad(nc_arr, pad_width=((split_axis_0, split_axis_0+rem_axis_0), 
+                                               (split_axis_1, split_axis_1+rem_axis_1),
+                                               (split_axis_2, split_axis_2+rem_axis_2)),
+                                               mode='constant', constant_values=0)
+            full_arr = np.pad(full_arr, pad_width=((split_axis_0, split_axis_0+rem_axis_0), 
+                                               (split_axis_1, split_axis_1+rem_axis_1),
+                                               (split_axis_2, split_axis_2+rem_axis_2)),
+                                               mode='constant', constant_values=0)
+            struct = np.pad(struct, pad_width=((split_axis_0, split_axis_0+rem_axis_0), 
+                                               (split_axis_1, split_axis_1+rem_axis_1),
+                                               (split_axis_2, split_axis_2+rem_axis_2)),
+                                               mode='constant', constant_values=0)
             #if full_shape[0] < 64:
             #    difference = 64 - full_shape[0]
             #    ed_arr = np.concatenate((ed_arr, np.zeros((difference, full_shape[1], full_shape[2]))), axis=0)
@@ -353,7 +388,7 @@ def convert_image_data(patient_df, modality='T2', image_dir_='../../data/upenn_G
             #    full_arr = np.concatenate((full_arr, np.zeros((difference, full_shape[1], full_shape[2]))), axis=0)
 
         
-        np.save(os.path.join(out_dir, pat+'_'+modality+'.npy'), [ed_arr, et_arr, nc_arr, full_arr])
+        np.save(os.path.join(out_dir, pat+'_'+modality+'.npy'), [ed_arr, et_arr, nc_arr, full_arr, struct])
         #np.save(os.path.join(out_dir, pat+'_'+modality+'.npy'), et_arr)
         #np.save(os.path.join(out_dir, pat+'_'+modality+'.npy'), nc_arr)
         #np.save(os.path.join(out_dir, pat+'_'+modality+'.npy'), full_arr)
