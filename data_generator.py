@@ -13,7 +13,7 @@ class DataGenerator(tf.keras.utils.Sequence):
     """
     Generate data for a Keras model
     """
-    def __init__(self, data_indices, labels, csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', data_dir='../../data/upenn_GBM/images/NIfTI-files/', modality='T2', batch_size=11, dim=(155, 240, 240), n_channels=1, n_classes=2, shuffle=True, to_augment=False, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, to_encode=False):
+    def __init__(self, data_indices, labels, csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', data_dir='../../data/upenn_GBM/images/NIfTI-files/', modality='T2', batch_size=11, dim=(155, 240, 240), n_channels=1, n_classes=2, shuffle=True, to_augment=False, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, to_encode=False, to_sectionate=False):
         """
         Initialization
         """
@@ -34,6 +34,7 @@ class DataGenerator(tf.keras.utils.Sequence):
         self.augment_types = augment_types
         self.to_encode = to_encode
         self.radiomics = None
+        self.to_sectionate = to_sectionate
 
         if self.to_encode:
             temp_radiomics = retrieve_data(self.csv_dir, self.modality)[0]
@@ -93,7 +94,10 @@ class DataGenerator(tf.keras.utils.Sequence):
         """
         Generator data containing batch_size samples
         """
-        X = np.empty((self.batch_size, *self.dim, self.n_channels))
+        if self.n_channels==1:
+            X = np.empty((self.batch_size, *self.dim))
+        else:
+            X = np.empty((self.batch_size, *self.dim, self.n_channels))
         y = np.empty((self.batch_size, self.n_classes), dtype=int)
 
         for i, idx in enumerate(data_indices_temp):
@@ -107,7 +111,15 @@ class DataGenerator(tf.keras.utils.Sequence):
                 in_arr = np.load(os.path.join(self.data_dir,idx+'_'+self.modality+ '.npy'))
 
             # take the first three images such that they are arranged into a single image with 3 channels.`
-            in_arr = np.transpose(in_arr[0:3], axes=[1,2,3,0])
+            if self.n_channels > 1:
+                if self.n_channels == 5:
+                    in_arr = np.transpose(in_arr, axes=[1,2,3,0])
+                elif self.n_channels == 4:
+                    in_arr = np.transpose(in_arr[[0,1,2,4]], axes=[1,2,3,0])
+                else:
+                    in_arr = np.transpose(in_arr[0:3], axes=[1,2,3,0])
+            else:
+                in_arr = in_arr[3]
 
             aug = idx.split('_')[-1]
             if aug in self.augment_types:
@@ -119,6 +131,12 @@ class DataGenerator(tf.keras.utils.Sequence):
                     in_arr = self.apply_noise(in_arr)
                 if 'deform' in aug:
                     in_arr = self.apply_deformation(in_arr)
+
+            if self.to_sectionate:
+                if self.n_channels == 1:
+                    in_arr = np.reshape(in_arr, self.dim)
+                else:
+                    in_arr = np.reshape(in_arr, (*self.dim, self.n_channels))
 
             X[i,] = in_arr
             #X[i,] = np.transpose(in_arr, axes=[1,2,3,0])
@@ -134,9 +152,23 @@ class DataGenerator(tf.keras.utils.Sequence):
 
     def apply_rotation(self, arr):
         angle = self.rng_rotate.integers(-180, high=180)
-        arr[:,:,:,0] = rotate(arr[:,:,:,0], angle, preserve_range=True)
-        arr[:,:,:,1] = rotate(arr[:,:,:,1], angle, preserve_range=True)
-        arr[:,:,:,2] = rotate(arr[:,:,:,2], angle, preserve_range=True)
+        if self.n_channels==1:
+            arr = rotate(arr, angle, preserve_range=True)
+        elif self.n_channels==4:
+            arr[:,:,:,0] = rotate(arr[:,:,:,0], angle, preserve_range=True)
+            arr[:,:,:,1] = rotate(arr[:,:,:,1], angle, preserve_range=True)
+            arr[:,:,:,2] = rotate(arr[:,:,:,2], angle, preserve_range=True)
+            arr[:,:,:,3] = rotate(arr[:,:,:,3], angle, preserve_range=True)
+        elif self.n_channels==5:
+            arr[:,:,:,0] = rotate(arr[:,:,:,0], angle, preserve_range=True)
+            arr[:,:,:,1] = rotate(arr[:,:,:,1], angle, preserve_range=True)
+            arr[:,:,:,2] = rotate(arr[:,:,:,2], angle, preserve_range=True)
+            arr[:,:,:,3] = rotate(arr[:,:,:,3], angle, preserve_range=True)
+            arr[:,:,:,4] = rotate(arr[:,:,:,4], angle, preserve_range=True)
+        else:
+            arr[:,:,:,0] = rotate(arr[:,:,:,0], angle, preserve_range=True)
+            arr[:,:,:,1] = rotate(arr[:,:,:,1], angle, preserve_range=True)
+            arr[:,:,:,2] = rotate(arr[:,:,:,2], angle, preserve_range=True)
         return arr
 
 

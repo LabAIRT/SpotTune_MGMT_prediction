@@ -313,46 +313,64 @@ def train_model_resnet(Inputs, dropout_rate=0.1, batchmomentum=0.6, l2_reg=0.05,
 
     model.add(Inputs)
 
-    model.add(Conv3D(64, (7, 7, 7), strides=(2, 2, 2), activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(TimeDistributed(Conv3D(64, (1, 7, 7), strides=(1, 2, 2), activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg))))
     model.add(BatchNormalization(momentum=batchmomentum))
 
-    model.add(MaxPooling3D((3, 3, 3), strides=(2, 2, 2)))
-
-    model.add(Residual(64, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-    model.add(Residual(64, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-
-    model.add(Residual(128, (3, 3, 3), strides=2, batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-    model.add(Residual(128, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-
-    model.add(Residual(256, (3, 3, 3), strides=2, batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-    model.add(Residual(256, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-
-    model.add(Residual(512, (3, 3, 3), strides=2, batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-    model.add(Residual(512, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-
-    model.add(GlobalAveragePooling3D())
-    model.add(Dropout(dropout_rate))
-
-
-    #model.add(Dense(100, activation='relu', name='comb_dense0', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    #model.add(BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm0'))
+    model.add(TimeDistributed(MaxPooling3D((1, 3, 3), strides=(1, 2, 2))))
     #model.add(Dropout(dropout_rate))
+
+    model.add(Residual(32, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
+    model.add(Residual(32, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
+
+    model.add(Residual(64, (3, 3, 3), strides=(1,2,2), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1))
+    model.add(Residual(64, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
+
+    model.add(Residual(128, (3, 3, 3), strides=(1,2,2), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1))
+    model.add(Residual(128, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
+
+    model.add(Residual(256, (3, 3, 3), strides=(2,2,2), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1))
+    model.add(Residual(256, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation))
+
+    model.add(Reshape((-1, 3, 3, 256)))
+    model.add(GlobalAveragePooling3D())
+    #model.add(Dropout(dropout_rate))
+
+
+    model.add(Dense(128, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(BatchNormalization(momentum=batchmomentum))
+    model.add(Dropout(dropout_rate))
+    #model.add(Dense(64, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    model.add(Dense(64, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(BatchNormalization(momentum=batchmomentum))
+    model.add(Dropout(dropout_rate))
+    model.add(Dense(32, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(BatchNormalization(momentum=batchmomentum))
+    model.add(Dropout(dropout_rate))
+    #model.add(Dense(32, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    #model.add(Dense(64, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    #model.add(Dense(64, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    #model.add(Dense(16, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    #model.add(Dense(8, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    #model.add(Dense(4, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+    #model.add(Dense(2, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    #model.add(BatchNormalization(momentum=batchmomentum))
+    #model.add(Dropout(dropout_rate))
+
+
 
     # output layer
     model.add(Dense(1, activation='sigmoid', name='ID_pred'))
@@ -370,6 +388,7 @@ def train_model_resnet34(Inputs, dropout_rate=0.1, batchmomentum=0.6):
     model.add(BatchNormalization(momentum=batchmomentum, name='ed_image_batchnorm0'))
 
     model.add(MaxPooling3D((3, 3, 3), strides=(2, 2, 2), name='ed_mp0'))
+    model.add(Dropout(dropout_rate))
 
     model.add(Residual(64, (3, 3, 3), batch_momentum=batchmomentum))
     model.add(Residual(64, (3, 3, 3), batch_momentum=batchmomentum))
@@ -392,6 +411,7 @@ def train_model_resnet34(Inputs, dropout_rate=0.1, batchmomentum=0.6):
     model.add(Residual(512, (3, 3, 3), batch_momentum=batchmomentum))
 
     model.add(GlobalAveragePooling3D())
+    model.add(Dropout(dropout_rate))
 
     model.add(Dense(100, activation='relu', name='comb_dense0'))
     model.add(BatchNormalization(momentum=batchmomentum, name='comb_dense_batchnorm0'))
@@ -407,145 +427,109 @@ def train_model_resnet34(Inputs, dropout_rate=0.1, batchmomentum=0.6):
     return model
 
 
-
-def train_model_alexnet(Inputs, dropout_rate=0.5, batchmomentum=0.6):
-
+def train_model_resnet50(Inputs, dropout_rate=0.1, batchmomentum=0.6, l2_reg=0.05, dilation=1):
     model = tf.keras.Sequential()
 
     model.add(Inputs)
-    model.add(Conv3D(96, (11, 11, 11), strides=4, padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(MaxPooling3D(3, strides=2, padding='same'))
-
-    model.add(Conv3D(256, (5, 5, 5), strides=1, padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(MaxPooling3D(3, strides=2))
-
-    model.add(Conv3D(384, (3, 3, 3), strides=1, padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Conv3D(384, (3, 3, 3), strides=1, padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Conv3D(256, (3, 3, 3), strides=1, padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-
-    model.add(MaxPooling3D(3, strides=2))
-
-    model.add(Flatten())
-
-    model.add(Dense(4096, activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-
-    model.add(Dense(4096, activation='relu'))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Dropout(dropout_rate))
-
-    model.add(Dense(1, activation='sigmoid'))
-
-    return model
-
-
-def train_model_lungnet(Inputs, dropout_rate=0.5, batchmomentum=0.99, l2_reg=0.00001):
-
-    model = tf.keras.Sequential()
-
-    model.add(Inputs)
-    model.add(Conv3D(64, (5, 5, 5), strides=2, dilation_rate=1, padding='valid', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.25))
-
-    model.add(Conv3D(128, (3, 3, 3), strides=1, dilation_rate=1, padding='valid', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.25))
-
-    model.add(MaxPooling3D(3, strides=2))
-
-    model.add(Conv3D(256, (3, 3, 3), strides=1, dilation_rate=2, padding='valid', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.25))
-
-    model.add(Conv3D(512, (3, 3, 3), strides=1, dilation_rate=2, padding='valid', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.25))
-
-    model.add(MaxPooling3D(3, strides=2))
-
-    model.add(Flatten())
-
-    model.add(Dense(1024, activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.5))
-    model.add(Dense(512, activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.5))
-    model.add(Dense(256, activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(LeakyReLU(alpha=0.1))
-    model.add(Dropout(0.5))
-    model.add(Dense(1, activation='sigmoid', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
-    model.add(BatchNormalization(momentum=batchmomentum))
-
-    return model
-
-
-def train_model_resnet50():
-    model = tf.keras.Sequential()
-
-    model.add(Inputs)
-    model.add(ZeroPadding2D(((3, 3), (3, 3), (3, 3))))
-    model.add(Conv3D(64, (7, 7, 7), strides=(2, 2, 2)))
-    model.add(ZeroPadding2D(((1, 1), (1, 1), (1, 1))))
+    model.add(ZeroPadding3D(((3, 3), (3, 3), (3, 3))))
+    model.add(Conv3D(64, (7, 7, 7), strides=(2, 2, 2), name='conv1_conv'))
+    model.add(ZeroPadding3D(((1, 1), (1, 1), (1, 1))))
     model.add(MaxPooling3D((3, 3, 3), strides=(2, 2, 2)))
 
     #Conv 2
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Activation('relu'))
+    model.add(BatchNormalization(momentum=batchmomentum), name='conv2_block1_preact_bn')
+    model.add(Activation('relu'), name='conv2_block1_preact_relu')
 
-    model.add(Bottleneck(256, 64, (3, 3, 3), preact=False))
-    model.add(Bottleneck(256, 64, (3, 3, 3), preact=True))
-    model.add(Bottleneck(256, 64, (3, 3, 3), strides=2, preact=True, pool=True))
+    model.add(Bottleneck(256, 64, (3, 3, 3), preact=False, name='conv2_block1'))
+    model.add(Bottleneck(256, 64, (3, 3, 3), preact=True), name='conv2_block2')
+    model.add(Bottleneck(256, 64, (3, 3, 3), strides=2, preact=True, pool=True, name='conv2_block3'))
 
     #Conv 3
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Activation('relu'))
+    model.add(BatchNormalization(momentum=batchmomentum), name='conv3_block1_preact_bn')
+    model.add(Activation('relu'), name='conv3_block1_preact_relu')
 
-    model.add(Bottleneck(256, 64, (3, 3, 3), preact=False))
-    model.add(Bottleneck(512, 128, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(512, 128, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(512, 128, (3, 3, 3), strides=2, preact=True, pool=True))
+    model.add(Bottleneck(512, 128, (3, 3, 3), preact=False), name='conv3_block1')
+    model.add(Bottleneck(512, 128, (3, 3, 3), preact=True), name='conv3_block2') 
+    model.add(Bottleneck(512, 128, (3, 3, 3), preact=True), name='conv3_block3') 
+    model.add(Bottleneck(512, 128, (3, 3, 3), strides=2, preact=True, pool=True, name='conv3_block4'))
 
     #Conv 4
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Activation('relu'))
+    model.add(BatchNormalization(momentum=batchmomentum), name='conv4_block1_preact_bn')
+    model.add(Activation('relu'), name='conv4_block1_preact_relu')
 
-    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=False))
-    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(1024, 256, (3, 3, 3), strides=2, preact=True, pool=True))
+    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=False), name='conv4_block1')
+    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True), name='conv4_block2') 
+    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True), name='conv4_block3') 
+    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True), name='conv4_block4') 
+    model.add(Bottleneck(1024, 256, (3, 3, 3), preact=True), name='conv4_block5') 
+    model.add(Bottleneck(1024, 256, (3, 3, 3), strides=2, preact=True, pool=True, name='conv4_block6'))
 
     #Conv 5
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Activation('relu'))
+    model.add(BatchNormalization(momentum=batchmomentum), name='conv5_block1_preact_bn')
+    model.add(Activation('relu'), name='conv5_block1_preact_relu')
 
-    model.add(Bottleneck(2048, 512, (3, 3, 3), preact=False))
-    model.add(Bottleneck(2048, 512, (3, 3, 3), preact=True)) 
-    model.add(Bottleneck(2048, 512, (3, 3, 3), preact=True))
+    model.add(Bottleneck(2048, 512, (3, 3, 3), preact=False), name='conv5_block1')
+    model.add(Bottleneck(2048, 512, (3, 3, 3), preact=True), name='conv5_block2') 
+    model.add(Bottleneck(2048, 512, (3, 3, 3), preact=True), name='conv5_block3')
 
-    model.add(BatchNormalization(momentum=batchmomentum))
-    model.add(Activation('relu'))
+    model.add(BatchNormalization(momentum=batchmomentum), name='post_bn')
+    model.add(Activation('relu'), name='post_relu')
 
-    model.add(GlobalAveragePooling3D())
+    model.add(GlobalAveragePooling3D(), name='avg_pool')
 
     model.add(Dense(1, activation='sigmoid')) 
 
     return model
 
 
+def train_model_resnet_timedistributed(Inputs, dropout_rate=0.1, batchmomentum=0.6, l2_reg=0.05, dilation=1):
+
+    model = tf.keras.Sequential()
+
+    model.add(Inputs)
+
+    model.add(TimeDistributed(Conv3D(64, (5, 7, 7), strides=(1, 2, 2), activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg))))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+
+    model.add(TimeDistributed(MaxPooling3D((1, 3, 3), strides=(1, 2, 2))))
+    model.add(TimeDistributed(Dropout(dropout_rate)))
+
+    model.add(TimeDistributed(Residual(64, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+    model.add(TimeDistributed(Residual(64, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+
+    model.add(TimeDistributed(Residual(128, (3, 3, 3), strides=(1, 2, 2), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+    model.add(TimeDistributed(Residual(128, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+
+    model.add(TimeDistributed(Residual(256, (3, 3, 3), strides=(1, 2, 2), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+    model.add(TimeDistributed(Residual(256, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+
+    model.add(TimeDistributed(Residual(512, (3, 3, 3), strides=(1, 2, 2), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=1)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+    model.add(TimeDistributed(Residual(512, (3, 3, 3), batch_momentum=batchmomentum, l2_reg=l2_reg, dilation=dilation)))
+    model.add(TimeDistributed(BatchNormalization(momentum=batchmomentum)))
+
+    model.add(TimeDistributed(GlobalAveragePooling3D()))
+    model.add(TimeDistributed(Dropout(dropout_rate)))
+
+
+    model.add(Dense(128, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(BatchNormalization(momentum=batchmomentum))
+    model.add(Dropout(dropout_rate))
+    model.add(Dense(64, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(BatchNormalization(momentum=batchmomentum))
+    model.add(Dropout(dropout_rate))
+    model.add(Dense(32, activation='relu', activity_regularizer=tf.keras.regularizers.L2(l2_reg)))
+    model.add(BatchNormalization(momentum=batchmomentum))
+    model.add(Dropout(dropout_rate))
+
+
+    # output layer
+    model.add(Dense(1, activation='sigmoid', name='ID_pred'))
+
+    return model

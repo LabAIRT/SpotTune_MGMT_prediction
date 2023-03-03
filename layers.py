@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import tensorflow as tf
-from tensorflow.keras.layers import Conv3D, Activation, Add, BatchNormalization
+from tensorflow.keras.layers import Conv3D, Activation, Add, BatchNormalization, MaxPooling3D, TimeDistributed
 
 @tf.keras.utils.register_keras_serializable()
 class Residual(tf.keras.layers.Layer):
@@ -12,33 +12,33 @@ class Residual(tf.keras.layers.Layer):
         self.strides = strides
         self.l2_reg = l2_reg
         self.dilation= dilation
-        
+    
+
     def build(self, input_shape):
         self.linact = Activation('linear', trainable=False)
-        self.conv1 =  Conv3D( self.channels_in,
+        self.conv1 =  TimeDistributed(Conv3D( self.channels_in,
                           self.kernel,
                           strides=self.strides,
                           dilation_rate=self.dilation,
                           activity_regularizer=tf.keras.regularizers.L2(self.l2_reg),
-                          padding='same')
+                          padding='same'))
         self.bn1 =    BatchNormalization(momentum=self.momentum)
         self.act1 =   Activation('relu') 
-        self.conv2 =  Conv3D( self.channels_in,
+        self.conv2 =  TimeDistributed(Conv3D( self.channels_in,
                           self.kernel,
                           strides=1,
                           dilation_rate=1,
                           activity_regularizer=tf.keras.regularizers.L2(self.l2_reg),
-                          padding='same')
+                          padding='same'))
         self.bn2 =    BatchNormalization(momentum=self.momentum)
-        self.residual = Conv3D(self.channels_in,
+        self.residual = TimeDistributed(Conv3D(self.channels_in,
                                (1, 1, 1),
                                strides=self.strides,
                                dilation_rate = self.dilation,
-                               padding='same')
+                               padding='same'))
         self.add =    Add()
         self.last_act = Activation('relu')
         super().build(input_shape)
-
 
     def call(self, x):
         input_layer = self.linact(x)
@@ -68,7 +68,7 @@ class Residual(tf.keras.layers.Layer):
 @tf.keras.utils.register_keras_serializable()
 class Bottleneck(tf.keras.layers.Layer):
     def __init__(self, channels_in, channels_bottle, kernel, strides=(1, 1, 1), batch_momentum=0.99, l2_reg=0, dilation=1, preact=True, pool=False, **kwargs):
-        super(Residual, self).__init__(**kwargs)
+        super(Bottleneck, self).__init__(**kwargs)
         self.channels_in = channels_in
         self.channels_bottle = channels_bottle
         self.kernel = kernel
@@ -81,30 +81,33 @@ class Bottleneck(tf.keras.layers.Layer):
        
     def build(self, input_shape):
         if self.preact:
-            self.prebn =    BatchNormalization(momentum=self.momentum)
-            self.preact = Activation('relu', trainable=True)
+            self.prebn =    BatchNormalization(momentum=self.momentum, name=f"{self.name}_preact_bn")
+            self.preact = Activation('relu', trainable=True, name=f"{self.name}_preact_bn")
         self.conv1 =  Conv3D( self.channels_bottle,
                           1,
                           strides=1,
                           dilation_rate=1,
                           activity_regularizer=tf.keras.regularizers.L2(self.l2_reg),
-                          padding='same')
-        self.bn1 =    BatchNormalization(momentum=self.momentum)
-        self.act1 =   Activation('relu') 
+                          padding='same',
+                          name=f"{self.name}_1_conv")
+        self.bn1 =    BatchNormalization(momentum=self.momentum, name=f"{self.name}_1_bn")
+        self.act1 =   Activation('relu', name=f"{self.name}_relu") 
         self.conv2 =  Conv3D( self.channels_bottle,
                           self.kernel,
                           strides=self.strides,
                           dilation_rate=self.dilation,
                           activity_regularizer=tf.keras.regularizers.L2(self.l2_reg),
-                          padding='same')
-        self.bn2 =    BatchNormalization(momentum=self.momentum)
-        self.act2 =   Activation('relu') 
+                          padding='same',
+                          name=f"{self.name}_2_conv")
+        self.bn2 =    BatchNormalization(momentum=self.momentum, name=f"{self.name}_2_bn")
+        self.act2 =   Activation('relu', name=f"{self.name}_2_relu") 
         self.conv3 =  Conv3D( self.channels_in,
                           1,
                           strides=1,
                           dilation_rate=1,
                           activity_regularizer=tf.keras.regularizers.L2(self.l2_reg),
-                          padding='same')
+                          padding='same',
+                          name=f"{self.name}_3_conv")
         if self.pool:
             self.residual = MaxPooling3D(1, strides=self.strides)
         else:
@@ -112,8 +115,9 @@ class Bottleneck(tf.keras.layers.Layer):
                                    (1, 1, 1),
                                    strides=self.strides,
                                    dilation_rate = self.dilation,
-                                   padding='same')
-        self.add =    Add()
+                                   padding='same',
+                                   name=f"{self.name}_0_conv")
+        self.add =    Add(name=f"{self.name}_out")
         super().build(input_shape)
 
 

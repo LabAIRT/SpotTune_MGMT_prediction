@@ -53,6 +53,67 @@ def run_model(config_file, X_train, y_train, X_val, y_val, components):
     return history, model, logdir
 
 
+def make_image_model():
+
+    from gbm_project.gen_params_cfg import gen_params, model_config
+    
+    gen_params['to_augment']=True
+
+    batch_size = model_config['batch_size']
+    n_epochs = model_config['n_epochs']
+    learning_rate = model_config['learning_rate']
+    dropout = model_config['dropout']
+    batch_momentum = model_config['batch_momentum']
+    op_momentum = model_config['op_momentum']
+    dilation = model_config['dilation']
+    l2_reg = model_config['l2_reg']
+
+    #if gen_params['to_augment']:
+    #    steps_per_epoch = len(X_train)*(len(gen_params['augment_types'])+1) // batch_size
+    #else:
+    #    steps_per_epoch = len(X_train) // batch_size
+    #val_steps = len(X_val) // batch_size
+
+    #gen_params = {'batch_size': config['n_batch'],
+    #              'data_dir': '../../data/upenn_GBM/numpy_conversion_downsample/',
+    #              'modality': 'FLAIR',
+    #              'dim': (70,86,82),
+    #              'n_channels': 3,
+    #              'n_classes': 2,
+    #              'seed': 42,
+    #              'shuffle': False}
+
+    #train_generator = data_generator(X_train, y_train, **gen_params) 
+    #val_generator = data_generator(X_val, y_val, **gen_params) 
+    #gen_params['to_augment']=True
+    #train_generator = DataGenerator(X_train, y_train, **gen_params)
+
+    #gen_params['to_augment']=False
+    #val_generator = DataGenerator(X_val, y_val, **gen_params) 
+
+    Inputs = tf.keras.Input(shape=(*gen_params['dim'], gen_params['n_channels']), batch_size=batch_size)
+    #Inputs = tf.keras.Input(shape=(70,86,82,3), batch_size=batch_size)
+
+    #model = train_model_sequential(Inputs, dropout_rate=dropout)
+    #model = train_model_resnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=l2_reg, dilation=dilation)
+    model = train_model_resnet50(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=l2_reg, dilation=dilation)
+    #model = train_model_alexnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
+    #model = train_model_lungnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=0.00001)
+    #model = train_model_resnet34(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
+    model.build(Inputs)
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+    #model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=op_momentum),
+    #model.compile(optimizer=tf.keras.optimizers.Adamax(learning_rate=learning_rate),
+    #model.compile(optimizer=tf.keras.optimizers.Nadam(learning_rate=learning_rate),
+    #model.compile(optimizer=tf.keras.optimizers.Ftrl(learning_rate=learning_rate),
+                  loss='binary_crossentropy',
+                  metrics=['accuracy', 'AUC'])
+     
+    print(model.summary())
+    return model
+
+
+
 def run_image_model(X_train, X_val, y_train, y_val):
 
     from gbm_project.gen_params_cfg import gen_params, model_config
@@ -96,6 +157,8 @@ def run_image_model(X_train, X_val, y_train, y_val):
 
     #model = train_model_sequential(Inputs, dropout_rate=dropout)
     model = train_model_resnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=l2_reg, dilation=dilation)
+    #model = train_model_resnet_timedistributed(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=l2_reg, dilation=dilation)
+    #model = train_model_resnet50(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=l2_reg, dilation=dilation)
     #model = train_model_alexnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
     #model = train_model_lungnet(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum, l2_reg=0.00001)
     #model = train_model_resnet34(Inputs, dropout_rate=dropout, batchmomentum=batch_momentum)
@@ -115,7 +178,7 @@ def run_image_model(X_train, X_val, y_train, y_val):
     early_stopping_monitor = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     model_checkpoint = tf.keras.callbacks.ModelCheckpoint(os.path.join(logdir, 'model_{epoch:03d}_{accuracy:0.2f}_{val_accuracy:0.2f}_{val_auc:0.2f}.h5'), 
                                                           save_best_only=True, monitor='val_accuracy', verbose=0)
-
+    lr_schedule = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
     #y_train_labels = y_train.iloc[:, 0].replace([1, 0], ['Methylated', 'Unmethylated'])
 
     y_train_labels = y_train.iloc[:, 0]
@@ -130,9 +193,22 @@ def run_image_model(X_train, X_val, y_train, y_val):
               class_weight=class_weight,
               verbose=1,
               callbacks=[tensorboard_callback, model_checkpoint])
+              #callbacks=[tensorboard_callback, model_checkpoint, lr_schedule])
               #callbacks=[model_checkpoint])
 
     return history, model, logdir, gen_params, model_config
+
+
+def lr_scheduler(epoch, lr):
+    """
+    learning rate scheduler
+    """
+    if epoch < 8:
+        lr = lr
+    else:
+        lr = lr * tf.math.exp(-0.5)
+    return lr
+
 
 
 if __name__ == '__main__':
