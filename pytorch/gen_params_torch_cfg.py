@@ -3,20 +3,26 @@
 model_config = { 
 	            "batch_size": 12,
 	            "n_epochs": 30,
-                "learning_rate": 1e-4,
+                "learning_rate": 1e-5,
                 #"learning_rate": 0.01,
 	            "dropout": 0.3,
                 "dilation": 1,
-                "l2_reg": 1e-6,
+                "l2_reg": 1e-8,
                 "dim": (70, 86, 86),
-                "lr_step_size": 15,
-                "lr_gamma": 0.1,
-                "no_freeze": ['conv_seg', 'layer4']
+                "agent_learning_rate": 0.0001,
+                "agent_l2_reg": 1e-8,
+                "no_freeze": ['conv_seg', 'layer4'],
+                "spottune": False,
+                "lr_sched": False,
+                "lr_factor": 0.1,
+                "lr_steps": [60, 80],
+                "lr_patience": 5
                }
 
 
 gen_params = {
-              'data_dir': '../../data/upenn_GBM/numpy_conversion_mod_channels/',
+              'data_dir': '../../data/upenn_GBM/numpy_conversion_man_DSC_channels/',
+              #'data_dir': '../../data/upenn_GBM/numpy_conversion_man_DTI_channels/',
               #'data_dir': '../../data/upenn_GBM/numpy_conversion_downsample_structure/',
               'csv_dir': '../../data/upenn_GBM/csvs/radiomic_features_CaPTk/',
               #'modality': ['FLAIR','T2','T1'],
@@ -30,7 +36,11 @@ gen_params = {
               'seed': 42,
               'to_augment': True,
               'to_encode': False,
-              'to_sectionate': False,
-              'augment_types': ('flip', 'rotate', 'deform', 'noise')
-              #'augment_types': ('flip', 'rotate', 'deform', 'noise', 'rotate2', 'rotate3', 'rotate4', 'rotate5')
+              'to_slice': False,
+              'n_slices': 10,
+              'augment_types': ('flip', 'rotate', 'deform')
+              #'augment_types': ('flip', 'rotate', 'noise', 'deform')
+              #'augment_types': ('flip', 'rotate', 'noise')
+              #'augment_types': ('flip', 'rotate', 'noise', 'deform', 'flip+rotate', 'flip+noise', 'flip+deform', 'rotate+noise', 'rotate+deform', 'noise+deform')
+              #'augment_types': ('flip', 'rotate', 'deform', 'noise')
              }

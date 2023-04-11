@@ -55,10 +55,10 @@ class Bottleneck(nn.Module):
         self.conv1 = nn.Conv3d(in_channels, channels, kernel_size=(1,1,1), stride=1, bias=False)
         self.bn1 = nn.BatchNorm3d(channels)
         self.relu = nn.ReLU()
-        if stride > 1:
-            self.conv2 = nn.Conv3d(channels, channels, kernel_size=(3,3,3), stride=stride, padding=1, dilation=dilation, bias=False)
+        if stride > 1 or dilation > 1:
+            self.conv2 = nn.Conv3d(channels, channels, kernel_size=(3,3,3), stride=stride, padding=dilation, dilation=dilation, bias=False)
         else:
-            self.conv2 = nn.Conv3d(channels, channels, kernel_size=(3,3,3), stride=stride, padding=1, dilation=dilation, bias=False)
+            self.conv2 = nn.Conv3d(channels, channels, kernel_size=(3,3,3), stride=stride, padding=dilation, dilation=dilation, bias=False)
         self.bn2 = nn.BatchNorm3d(channels)
         self.conv3 = nn.Conv3d(channels, channels*self.expansion, kernel_size=(1,1,1), stride=1, bias=False)
         self.bn3 = nn.BatchNorm3d(channels*self.expansion)
@@ -114,7 +114,7 @@ class ResNet3D18(nn.Module):
         self.dense3 = nn.Linear(64, 32)
         self.classify = nn.Linear(32, 1)
 
-    def forward(self, x):
+    def forward(self, x, policy=None):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -156,14 +156,14 @@ class ResNet3D50(nn.Module):
             Bottleneck(512, 128),
             Bottleneck(512, 128))
         self.layer3 = nn.Sequential(
-            Bottleneck(512, 256, stride=2),
+            Bottleneck(512, 256, stride=2, dilation=1),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256))
         self.layer4 = nn.Sequential(
-            Bottleneck(1024, 512, stride=2),
+            Bottleneck(1024, 512, stride=2, dilation=1),
             Bottleneck(2048, 512),
             Bottleneck(2048, 512))
         self.avgpool = nn.AdaptiveAvgPool3d((1,1,1))
@@ -173,7 +173,7 @@ class ResNet3D50(nn.Module):
         #self.dense3 = nn.Linear(64, 32)
         self.classify = nn.Linear(512*self.expansion, 1)
 
-    def forward(self, x):
+    def forward(self, x, policy=None):
         residual = x
 
         x = self.conv1(x)

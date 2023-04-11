@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from scipy.ndimage import center_of_mass
 from skimage.util import random_noise
 from skimage.transform import rotate
 import elasticdeform
@@ -13,7 +14,7 @@ class DatasetGenerator(torch.utils.data.Dataset):
     """
     generate images for pytorch dataset
     """
-    def __init__(self, data_indices, labels, data_dir='../../data/upenn_GBM/images/NIfTI-files/', csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', modality=['FLAIR'], dim=(70,86,86), n_channels=3, to_augment=False, to_encode=False, to_sectionate=False, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, transform=None, target_transform=None):
+    def __init__(self, data_indices, labels, data_dir='../../data/upenn_GBM/images/NIfTI-files/', csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', modality=['FLAIR'], dim=(70,86,86), n_channels=3, to_augment=False, to_encode=False, to_slice=False, n_slices=10, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, transform=None, target_transform=None):
         self.labels = labels
         self.data_indices = data_indices
 
@@ -22,6 +23,8 @@ class DatasetGenerator(torch.utils.data.Dataset):
         else:
             self.n_channels = n_channels
         self.dim = dim
+        self.n_slices = n_slices
+        self.to_slice = to_slice
         self.rng_noise = np.random.default_rng(seed)
         self.rng_rotate = np.random.default_rng(seed)
         self.data_dir = data_dir
@@ -31,7 +34,7 @@ class DatasetGenerator(torch.utils.data.Dataset):
         self.augment_types = augment_types
         self.to_encode = to_encode
         self.radiomics = None
-        self.to_sectionate = to_sectionate
+        self.to_slice = to_slice
         self.transform = transform
         self.target_transform = target_transform
 
@@ -60,6 +63,23 @@ class DatasetGenerator(torch.utils.data.Dataset):
                 self.data_indices = self.data_indices.append(augment_idx[aug].index)
 
             self.labels = pd.concat([self.labels, *augment_idx.values()])
+            n_true = np.sum(self.labels)
+            n_false = len(self.labels)
+            
+            # number of negatives to remove to even out labels
+            # its easier to augment and then randomly remove up to a certain amount than to add a radom
+            # assortment of augmentations on top of what is already there. 
+            to_remove = int(len(self.labels) - 2*np.sum(self.labels))
+
+            # patient indices to remove, randomly sampled
+            idx_to_remove = self.labels[self.labels==0].dropna().sample(frac=1, random_state=42)[-to_remove:].index.tolist()
+            self.labels = self.labels.drop(idx_to_remove)
+            self.data_indices = self.data_indices.drop(idx_to_remove)
+                
+
+
+
+        
 
 
     def __len__(self):
@@ -72,14 +92,25 @@ class DatasetGenerator(torch.utils.data.Dataset):
         pat_idx = self.labels.index.values[idx]
         label = self.labels.loc[pat_idx]
 
+
         # retrieve array (image) based on number of modalities
         if len(self.modality) < 2:
             in_arr = self.get_pat_array(pat_idx)
         else:
             in_arr = self.get_pat_mod_array(pat_idx)
 
-        if self.to_sectionate:
-            in_arr = np.reshape(in_arr, self.dim)
+        # take n_slices on either side of the centroid in the depth dimension
+        if self.to_slice:
+            com = center_of_mass(in_arr[0])
+            depth_com = int(com[0])
+            in_arr = in_arr[:, (depth_com-self.n_slices):(depth_com+self.n_slices), :, :]
+            if len(in_arr[0]) < self.n_slices*2:
+                n_pad = self.n_slices*2 - len(in_arr[0])
+                in_arr = np.pad(in_arr, pad_width=((0, 0), 
+                                                   (0, n_pad),
+                                                   (0, 0),
+                                                   (0, 0)),
+                                                   mode='constant', constant_values=0)
 
         if self.transform:
             in_arr = self.transform(in_arr)
@@ -110,28 +141,23 @@ class DatasetGenerator(torch.utils.data.Dataset):
             if self.n_channels == 5:
                 in_arr = in_arr
             elif self.n_channels == 4:
-                in_arr = in_arr[[0,1,2,4]]
+                in_arr = in_arr[[0,1,2,3]]
             else:
                 in_arr = in_arr[0:3]
         else:
             in_arr = in_arr[3]
 
-        aug = pat_idx.split('_')[-1]
-        if aug in self.augment_types:
-            if 'flip' in aug:
-                in_arr = self.apply_flip(in_arr)
-            if 'rotate' in aug:
-                in_arr = self.apply_rotation(in_arr)
-            if 'noise' in aug:
-                in_arr = self.apply_noise(in_arr)
-            if 'deform' in aug:
-                in_arr = self.apply_deformation(in_arr)
-
-        if self.to_sectionate:
-            if self.n_channels == 1:
-                in_arr = np.reshape(in_arr, self.dim)
-            else:
-                in_arr = np.reshape(in_arr, (*self.dim, self.n_channels))
+        if self.to_augment:
+            aug = pat_idx.split('_')[-1]
+            if aug in self.augment_types:
+                if 'flip' in aug:
+                    in_arr = self.apply_flip(in_arr)
+                if 'rotate' in aug:
+                    in_arr = self.apply_rotation(in_arr)
+                if 'noise' in aug:
+                    in_arr = self.apply_noise(in_arr)
+                if 'deform' in aug:
+                    in_arr = self.apply_deformation(in_arr)
 
         return in_arr
 
@@ -157,16 +183,17 @@ class DatasetGenerator(torch.utils.data.Dataset):
             # take the whole tumor image, since each channel will be a separate modality
             mod_arr[imod] = in_arr[3]
 
-        aug = pat_idx.split('_')[-1]
-        if aug in self.augment_types:
-            if 'flip' in aug:
-                mod_arr = self.apply_flip(mod_arr)
-            if 'rotate' in aug:
-                mod_arr = self.apply_rotation(mod_arr)
-            if 'noise' in aug:
-                mod_arr = self.apply_noise(mod_arr)
-            if 'deform' in aug:
-                mod_arr = self.apply_deformation(mod_arr)
+        if self.to_augment: 
+            aug = pat_idx.split('_')[-1]
+            if aug in self.augment_types:
+                if 'flip' in aug:
+                    mod_arr = self.apply_flip(mod_arr)
+                if 'rotate' in aug:
+                    mod_arr = self.apply_rotation(mod_arr)
+                if 'noise' in aug:
+                    mod_arr = self.apply_noise(mod_arr)
+                if 'deform' in aug:
+                    mod_arr = self.apply_deformation(mod_arr)
 
         return mod_arr
 
