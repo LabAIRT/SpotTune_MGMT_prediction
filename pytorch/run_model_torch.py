@@ -17,7 +17,7 @@ from gbm_project.pytorch.resnet_torch import ResNet3D18, ResNet3D50
 from gbm_project.pytorch.resnet_spottune import resnet_spottune, resnet_agent
 
 from MedicalNet.models import resnet
-from gbm_project.pytorch.spottune_layer_translation_cfg import layer_loop
+from gbm_project.pytorch.spottune_layer_translation_cfg import layer_loop, layer_loop_downsample
 
 MODELS = ['ResNet18',
           'ResNet50']
@@ -33,11 +33,19 @@ class RunModel(object):
         self.n_epochs = config['n_epochs']
         self.spottune = config['spottune']
         self.n_channels = gen_params['n_channels']
-        self.seed = gen_params['seed'] 
+        self.n_classes = config['n_classes']
+        self.gumbel_temperature = config['gumbel_temperature']
         self.policy = None
         self.gen_params = gen_params
         self.config = config
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.seed = gen_params['seed']
+        self.seed_switch = config['seed_switch']
+        self.seed_steps = config['seed_steps']
+        self.seed_vals = config['seed_vals']
+        self.temp_steps = config['temp_steps']
+        self.temp_vals = config['temp_vals']
 
         self.loss_fn = nn.BCEWithLogitsLoss().to(self.device)
         self.acc_fn = torchmetrics.classification.BinaryAccuracy(threshold=0.5).to(self.device)
@@ -49,7 +57,8 @@ class RunModel(object):
         print('remember to set the data')
         self.epoch = 0
         self.best_acc =0.
-        self.best_loss =0.
+        self.best_loss = 1.0
+        self.best_sum = 0.
 
 
     def set_model(self, model_name='ResNet18', transfer=False):
@@ -145,7 +154,7 @@ class RunModel(object):
             elif model_name == 'spottune':
                 if not self.spottune:
                     self.spottune = True
-                self.model = resnet_spottune().to(self.device)
+                self.model = resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
 
                 initial_state = torch.load('./MedicalNet/pretrain/resnet_50.pth', map_location=self.device)['state_dict']
 
@@ -158,10 +167,57 @@ class RunModel(object):
                     for name, new in layer_loop.items():
                         if name in mod_name:
                             mod_name = mod_name.replace(name, new)
+                    for name, new in layer_loop_downsample.items():
+                        if name in mod_name:
+                            mod_name = mod_name.replace(name, new)
                     fixed_state[mod_name] = v
 
+                fixed_state_v2 = OrderedDict()
+                for k, v in fixed_state.items():
+                    fixed_state_v2[k] = v
+                    fixed_state_v2[k.replace('blocks', 'parallel_blocks')] = v
+
                 if self.n_channels > 1:
-                    fixed_state['conv1.weight'] = fixed_state['conv1.weight'].repeat(1,self.n_channels,1,1,1)/self.n_channels
+                    fixed_state_v2['conv1.weight'] = fixed_state['conv1.weight'].repeat(1,self.n_channels,1,1,1)/self.n_channels
+                    #fixed_state_v2['conv1.weight'] = fixed_state['conv1.weight'].repeat(1,self.n_channels,1,1,1)
+
+                self.model.load_state_dict(fixed_state_v2, strict=False)
+                self.freeze_layers(ignore=['classify', 'parallel_blocks'])
+
+###########################################################################################################
+######################################################################################################
+            elif model_name == 'spottune_imagenet':
+                if not self.spottune:
+                    self.spottune = True
+                self.model = resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
+
+                initial_state = torchvision.models.resnet50(weights='DEFAULT').state_dict()
+
+                fixed_state = OrderedDict()
+                for k, v in initial_state.items():
+                    mod_name = k
+                    parallel_mod_name = k
+                    for name, new in layer_loop.items():
+                        if name in mod_name:
+                            mod_name = mod_name.replace(name, f"blocks.{new}")
+                            parallel_mod_name = mod_name.replace(name, f"parallel_blocks.{new}")
+                    for name, new in layer_loop_downsample.items():
+                        if name in mod_name:
+                            mod_name = mod_name.replace(name, new)
+                    fixed_state[mod_name] = v
+                    fixed_state[parallel_mod_name] = v
+
+                for name, w in fixed_state.items():
+                    if 'blocks' in name and any(i in name for i in ('downsample', 'conv1', 'conv3')):
+                        fixed_state[name] = w.unsqueeze(-1)
+                    elif 'conv1' in name:
+                        #fixed_state[name] = w.unsqueeze(-1).transpose(-1, 2).repeat(1,1,7,1,1)
+                        fixed_state[name] = w.unsqueeze(-1).repeat(1,1,1,1,7)
+                    elif 'conv2' in name:
+                        #fixed_state[name] = w.unsqueeze(-1).transpose(-1, 2).repeat(1,1,3,1,1)
+                        fixed_state[name] = w.unsqueeze(-1).repeat(1,1,1,1,3)
+                    else:
+                        fixed_state[name] = w
 
                 self.model.load_state_dict(fixed_state, strict=False)
                 self.freeze_layers(ignore=['classify', 'parallel_blocks'])
@@ -178,7 +234,7 @@ class RunModel(object):
 
 
     def set_agent(self):
-        self.agent = resnet_agent(num_classes=(sum(self.model.layers)*2)).to(self.device)
+        self.agent = resnet_agent(num_classes=(sum(self.model.layers)*2), in_channels=self.n_channels, dropout=self.config['agent_dropout']).to(self.device)
         self.agent_optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.config['agent_learning_rate'], weight_decay=self.config['agent_l2_reg'])
         #self.agent_lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(self.agent_optimizer, factor=self.config['agent_lr_factor'], patience=self.config['agent_lr_patience'], verbose=True)
         self.agent_lr_sched = torch.optim.lr_scheduler.MultiStepLR(self.agent_optimizer, milestones=self.config['lr_steps'], gamma=self.config['lr_factor'], verbose=True)
@@ -241,12 +297,12 @@ class RunModel(object):
         total_loss = 0.
         
         for batch, (X, y) in enumerate(dataloader):
-            torch.manual_seed(self.seed)
+            #torch.manual_seed(self.seed)
             X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
 
             if self.spottune:
                 probs = self.agent(X)
-                action = self.gumbel_softmax(probs.view(probs.size(0), -1, 2))
+                action = self.gumbel_softmax(probs.view(probs.size(0), -1, 2), self.gumbel_temperature)
                 self.policy = action[:,:,1]
 
             #Compute prediction error
@@ -266,7 +322,7 @@ class RunModel(object):
             if self.spottune:
                 self.agent_optimizer.step()
             
-            print(f"[{batch+1:>2g}/{num_batches}][{'='*int((100*((batch+1)/num_batches))//5) + '.'*int((100*((num_batches-(batch+1))/num_batches))//5)}] "
+            print(f"[{batch+1:02g}/{num_batches}][{'='*int((100*((batch+1)/num_batches))//5) + '.'*int((100*((num_batches-(batch+1))/num_batches))//5)}] "
                   f"loss: {loss:>0.4f}, "
                   f"Acc: {self.acc_fn.compute():>0.4f}, "
                   f"AUC: {self.auc_fn.compute():>0.4f}", end='\r')
@@ -301,30 +357,14 @@ class RunModel(object):
         if self.spottune:
             self.agent.eval()
         test_loss = 0
-        #if data_to_use == 'test':
-        #    self.model.to('cpu')
-        #    self.agent.to('cpu')
-        #    self.acc_fn.to('cpu')
-        #    self.auc_fn.to('cpu')
-        #    self.loss_fn.to('cpu')
-        #elif next(self.model.parameters()).device != self.device:
-        #    self.model.to(self.device)
-        #    self.agent.to(self.device)
-        #    self.acc_fn.to(self.device)
-        #    self.auc_fn.to(self.device)
-        #    self.loss_fn.to(self.device)
 
         with torch.no_grad():
             for batch, (X, y) in enumerate(dataloader):
-                #if data_to_use == 'test':
-                #    X, y = X.type(torch.FloatTensor), y.type(torch.FloatTensor)
-                #else:
-                #    X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
                 X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
 
                 if self.spottune:
                     probs = self.agent(X)
-                    action = self.gumbel_softmax(probs.view(probs.size(0), -1, 2))
+                    action = self.gumbel_softmax(probs.view(probs.size(0), -1, 2), self.gumbel_temperature)
                     self.policy = action[:,:,1]
 
                 pred = self.model(X, self.policy)
@@ -337,21 +377,31 @@ class RunModel(object):
                       
         iacc = self.acc_fn.compute()
         iauc = self.auc_fn.compute()
+
+        iacc_err = torch.sqrt((1/size)*iacc*(1-iacc))
+        iauc_err = torch.sqrt((1/size)*iauc*(1-iauc))
+
         test_loss /= num_batches
-        print(f"\nAvg {data_to_use.capitalize()}   Loss: {test_loss:>0.4f}; "
-              f"      {data_to_use.capitalize()} ACC: {iacc:>0.4f}; "
-              f"        {data_to_use.capitalize()} AUC: {iauc:>0.4f}")
+        print(f"\nAvg {data_to_use.capitalize()}   Loss: {test_loss:>0.3f}; "
+              f"      {data_to_use.capitalize()} ACC: {iacc:>0.3f} \u00B1 {iacc_err:>0.2}; "
+              f"        {data_to_use.capitalize()} AUC: {iauc:>0.3f} \u00B1 {iauc_err:>0.2}")
 
   
         self.writer.add_scalars('Loss', {f"{data_to_use}_loss": test_loss}, self.epoch)
         self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
         self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
+        #self.writer.add_scalars('ACC', {f"{data_to_use}_pos_err_acc": iacc + iacc_err}, self.epoch)
+        #self.writer.add_scalars('ACC', {f"{data_to_use}_neg_err_acc": iacc - iacc_err}, self.epoch)
+        #self.writer.add_scalars('AUC', {f"{data_to_use}_pos_err_auc": iauc + iauc_err}, self.epoch)
+        #self.writer.add_scalars('AUC', {f"{data_to_use}_neg_err_auc": iauc - iauc_err}, self.epoch)
 
         if data_to_use == 'val':
-            if (iacc > self.best_acc or test_loss > self.best_loss) and iacc > 0.6:
+            if (iacc > self.best_acc or test_loss < self.best_loss or (iacc+iauc)>self.best_sum) and iacc > 0.6:
+                if (iacc+iauc) > self.best_sum:
+                    self.best_sum = iacc+iauc
                 if iacc > self.best_acc:
                     self.best_acc = iacc
-                if test_loss > self.best_loss:
+                if test_loss < self.best_loss:
                     self.best_loss = test_loss
                 out_path = os.path.join(self.log_dir, f"best_model_{self.epoch}_{test_loss:0.2f}_{iacc:>0.2f}_{iauc:>0.2f}.pth")
                 if self.spottune:
@@ -378,14 +428,38 @@ class RunModel(object):
         self.policy = None
         return test_loss.cpu().detach().numpy(), iacc.cpu().detach().numpy(), iauc.cpu().detach().numpy()
 
+    def adjust_temp(self):
+        for i, step in enumerate(self.temp_steps):
+            if self.epoch >= step:
+                self.gumbel_temperature = self.temp_vals[i]
+        print(f"temperature status: {self.gumbel_temperature}")
+
+
+    def adjust_seed(self):
+        for i, step in enumerate(self.seed_steps):
+            if self.epoch >= step:
+                self.seed_switch = self.seed_vals[i]
+
+        print(f"random status: {self.seed_switch}")
+
 
     def run(self):
         self.epoch = 0
+        self.adjust_temp()
+        self.adjust_seed()
+        if self.seed_switch == 'high':
+            torch.manual_seed(self.seed)
         for t in range(self.n_epochs):
             print(f"Epoch {t+1}/{self.n_epochs}")
             self.epoch = t + 1
+            self.adjust_temp()
+            self.adjust_seed()
+            if self.seed_switch == 'mid':
+                torch.manual_seed(self.seed)
             self.train('train')
-            torch.manual_seed(self.seed)
+            if self.seed_switch == 'mid':
+                torch.manual_seed(self.seed)
+            #torch.manual_seed(self.seed)
             val_loss = self.test('val')
             if self.config['lr_sched']:
                 print('sched step')
@@ -397,13 +471,16 @@ class RunModel(object):
             print(f"-----------------------------------------------------------")
         self.epoch += 1
         print("Train Total")
-        torch.manual_seed(self.seed)
+        if self.seed_switch == 'mid':
+            torch.manual_seed(self.seed)
         self.test('train')
         print("Val Total")
-        torch.manual_seed(self.seed)
+        if self.seed_switch == 'mid':
+            torch.manual_seed(self.seed)
         self.test('val')
         print("Test")
-        torch.manual_seed(self.seed)
+        if self.seed_switch == 'mid':
+            torch.manual_seed(self.seed)
         self.test('test')
         if self.spottune:
             torch.save({'model_state_dict': self.model.state_dict(),
@@ -438,7 +515,7 @@ class RunModel(object):
 
                 if self.spottune:
                     probs = self.agent(X)
-                    action = self.gumbel_softmax(probs.view(probs.size(0), -1, 2))
+                    action = self.gumbel_softmax(probs.view(probs.size(0), -1, 2), self.gumbel_temperature)
                     self.policy = action[:,:,1]
 
                 pred = self.model(X, self.policy)
@@ -470,7 +547,8 @@ class RunModel(object):
 
 
     def sample_gumbel(self, shape, eps=1e-20):
-        torch.manual_seed(self.seed)
+        if self.seed_switch == 'low':
+            torch.manual_seed(self.seed)
         U = torch.cuda.FloatTensor(shape).uniform_()
         #U = torch.FloatTensor(shape).uniform_()
         return -Variable(torch.log(-torch.log(U + eps) + eps))

@@ -87,7 +87,7 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, layers, in_channels=3, num_classes=1):
+    def __init__(self, block, layers, in_channels=3, num_classes=1, dropout=0.0):
         super(ResNet, self).__init__()
         self.expansion = 4
         self.factor = 2
@@ -119,7 +119,8 @@ class ResNet(nn.Module):
         self.parallel_blocks = nn.ModuleList(self.parallel_blocks)
 
         self.avgpool = nn.AdaptiveAvgPool3d((1,1,1))
-        self.classify = nn.Linear(self.channels[-1]*self.expansion, 1)
+        self.classify = nn.Linear(self.channels[-1]*self.expansion, num_classes)
+        self.dropout = nn.Dropout(dropout)
 
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
@@ -128,6 +129,7 @@ class ResNet(nn.Module):
             elif isinstance(m, nn.BatchNorm3d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
+
 
 
     def _make_layer(self, block, channels, n_blocks, stride=1, dilation=1):
@@ -163,6 +165,7 @@ class ResNet(nn.Module):
                     f1 = output
                     f2 = output_
                     x = f1*(1-action_mask) + f2*action_mask
+                    x = self.dropout(x)
                     t += 1
 
         else:
@@ -170,6 +173,7 @@ class ResNet(nn.Module):
                 for b in range(n_blocks):
                     output = self.blocks[segment][b](x)
                     x = output
+                    x = self.dropout(x)
                     t += 1
 
         x = self.avgpool(x)
@@ -180,7 +184,7 @@ class ResNet(nn.Module):
 
 
 class Agent(nn.Module):
-    def __init__(self, block, layers, in_channels=3, num_classes=1):
+    def __init__(self, block, layers, in_channels=3, num_classes=1, dropout=0.0):
         super(Agent, self).__init__()
         self.expansion = 1
         self.factor = 1
@@ -207,6 +211,7 @@ class Agent(nn.Module):
     
         self.avgpool = nn.AdaptiveAvgPool3d((1,1,1))
         self.classify = nn.Linear(self.channels[-1]*self.expansion, num_classes)
+        self.dropout = nn.Dropout(dropout)
 
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
@@ -242,6 +247,7 @@ class Agent(nn.Module):
                 for b in range(n_blocks):
                     output = self.blocks[segment][b](x)
                     x = output
+                    x = self.dropout(x)
                     t += 1
 
         else:
@@ -249,6 +255,7 @@ class Agent(nn.Module):
                 for b in range(n_blocks):
                     output = self.blocks[segment][b](x)
                     x = output
+                    x = self.dropout(x)
                     t += 1
 
         x = self.avgpool(x)
@@ -258,12 +265,12 @@ class Agent(nn.Module):
         return x
 
 
-def resnet_spottune(num_classes=1, blocks=Bottleneck):
-    return ResNet(blocks, [3,4,6,3], in_channels=3, num_classes=num_classes)
+def resnet_spottune(num_classes=1, in_channels=3, dropout=0.0, blocks=Bottleneck):
+    return ResNet(blocks, [3,4,6,3], in_channels=in_channels, num_classes=num_classes, dropout=dropout)
 
 
-def resnet_agent(num_classes=1, blocks=BasicBlock):
-    return Agent(blocks, [1,1,1,1], in_channels=3, num_classes=num_classes)
+def resnet_agent(num_classes=1, in_channels=3, dropout=0.0, blocks=BasicBlock):
+    return Agent(blocks, [1,1,1,1], in_channels=in_channels, num_classes=num_classes, dropout=dropout)
 
 
 
