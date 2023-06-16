@@ -156,14 +156,14 @@ class ResNet3D50(nn.Module):
             Bottleneck(512, 128),
             Bottleneck(512, 128))
         self.layer3 = nn.Sequential(
-            Bottleneck(512, 256, stride=2, dilation=1),
+            Bottleneck(512, 256, stride=1, dilation=2),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256),
             Bottleneck(1024, 256))
         self.layer4 = nn.Sequential(
-            Bottleneck(1024, 512, stride=2, dilation=1),
+            Bottleneck(1024, 512, stride=1, dilation=4),
             Bottleneck(2048, 512),
             Bottleneck(2048, 512))
         self.avgpool = nn.AdaptiveAvgPool3d((1,1,1))

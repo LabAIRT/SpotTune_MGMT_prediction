@@ -1,5 +1,4 @@
 import os
-import copy
 from datetime import datetime
 from collections import OrderedDict
 import numpy as np
@@ -20,13 +19,12 @@ from gbm_project.pytorch.resnet_spottune import resnet_spottune, resnet_agent
 from MedicalNet.models import resnet
 from gbm_project.pytorch.spottune_layer_translation_cfg import layer_loop, layer_loop_downsample
 
-MODELS = ['ResNet18',
-          'ResNet50']
-TRANSFER_MODELS = ['MedResNet18',
-                   'MedResNet50',
-                   'MedResNet101',
-                   'ResNet50_torch',
-                   'spottune']
+from ray import tune
+from ray.air import Checkpoint, session
+from ray.tune.schedulers import ASHAScheduler
+
+
+
 
 class RunModel(object):
     def __init__(self, config, gen_params):
@@ -47,32 +45,29 @@ class RunModel(object):
         self.seed_vals = config['seed_vals']
         self.temp_steps = config['temp_steps']
         self.temp_vals = config['temp_vals']
-        
-        if self.n_classes == 1:
-            self.loss_fn = nn.BCEWithLogitsLoss().to(self.device)
-            self.acc_fn = torchmetrics.classification.BinaryAccuracy(threshold=0.5).to(self.device)
-            self.auc_fn = torchmetrics.classification.BinaryAUROC().to(self.device)
-            self.confusion = torchmetrics.classification.BinaryConfusionMatrix().to(self.device)
-        else:
-            self.loss_fn = nn.CrossEntropyLoss().to(self.device)
-            self.acc_fn = torchmetrics.classification.Accuracy(task='multiclass', num_classes=self.n_classes).to(self.device)
-            self.auc_fn = torchmetrics.classification.AUROC(task='multiclass', num_classes=self.n_classes).to(self.device)
-            self.confusion = torchmetrics.classification.ConfusionMatrix(task='multiclass', num_classes=self.n_classes).to(self.device)
 
-        self.log_dir = self.config['log_dir']
-        if self.log_dir is None:
-            self.log_dir = os.path.join('logs', datetime.now().strftime("%Y%m%d-%H%M%S"))
-        print(f"logs are located at: {self.log_dir}")
-        self.writer = SummaryWriter(self.log_dir)
+        self.loss_fn = nn.BCEWithLogitsLoss().to(self.device)
+        self.acc_fn = torchmetrics.classification.BinaryAccuracy(threshold=0.5).to(self.device)
+        self.auc_fn = torchmetrics.classification.BinaryAUROC().to(self.device)
+
+        #self.log_dir = os.path.join(config['working_dir'],'logs', datetime.now().strftime("%Y%m%d-%H%M%S"))
+        #print(f"logs are located at: {self.log_dir}")
+        #self.writer = SummaryWriter(self.log_dir)
         print('remember to set the data')
         self.epoch = 0
         self.best_acc =0.
         self.best_loss = 1.0
         self.best_sum = 0.
-        self.best_model = None
 
 
     def set_model(self, model_name='ResNet18', transfer=False):
+        MODELS = ['ResNet18',
+                  'ResNet50']
+        TRANSFER_MODELS = ['MedResNet18',
+                           'MedResNet50',
+                           'MedResNet101',
+                           'ResNet50_torch',
+                           'spottune']
         if not transfer:
             if model_name == 'ResNet18':
                 self.model = ResNet3D18(in_channels=self.gen_params['n_channels'], 
@@ -167,7 +162,7 @@ class RunModel(object):
                     self.spottune = True
                 self.model = resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
 
-                initial_state = torch.load('./MedicalNet/pretrain/resnet_50.pth', map_location=self.device)['state_dict']
+                initial_state = torch.load(os.path.join(self.config['working_dir'], './MedicalNet/pretrain/resnet_50.pth'), map_location=self.device)['state_dict']
 
                 fixed_state = OrderedDict()
                 for k, v in initial_state.items():
@@ -320,13 +315,9 @@ class RunModel(object):
             pred = self.model(X, self.policy)
             loss = self.loss_fn(pred, y)
             total_loss += self.loss_fn(pred, y)
-           
-            if self.n_classes > 1:
-                acc = self.acc_fn(pred, torch.argmax(y.squeeze(), dim=1))
-                auc = self.auc_fn(pred, torch.argmax(y.squeeze(), dim=1))
-            else:
-                acc = self.acc_fn(pred, y)
-                auc = self.auc_fn(pred, y)
+            
+            acc = self.acc_fn(pred, y)
+            auc = self.auc_fn(pred, y)
         
             #Backpropagate
             self.optimizer.zero_grad()
@@ -337,10 +328,10 @@ class RunModel(object):
             if self.spottune:
                 self.agent_optimizer.step()
             
-            print(f"[{batch+1:02g}/{num_batches}][{'='*int((100*((batch+1)/num_batches))//5) + '.'*int((100*((num_batches-(batch+1))/num_batches))//5)}] "
-                  f"loss: {loss:>0.4f}, "
-                  f"Acc: {self.acc_fn.compute():>0.4f}, "
-                  f"AUC: {self.auc_fn.compute():>0.4f}", end='\r')
+            #print(f"[{batch+1:02g}/{num_batches}][{'='*int((100*((batch+1)/num_batches))//5) + '.'*int((100*((num_batches-(batch+1))/num_batches))//5)}] "
+            #      f"loss: {loss:>0.4f}, "
+            #      f"Acc: {self.acc_fn.compute():>0.4f}, "
+            #      f"AUC: {self.auc_fn.compute():>0.4f}", end='\r')
 
         iacc = self.acc_fn.compute()
         iauc = self.auc_fn.compute()
@@ -349,14 +340,12 @@ class RunModel(object):
         print(f"\nAvg Train Loss: {total_loss:>0.4f}; "
               f"Total Train ACC: {iacc:>0.4f}; "
               f"Total Train AUC: {iauc:>0.4f}")    
-        self.writer.add_scalars('Loss', {f"{data_to_use}_loss": total_loss}, self.epoch)
-        self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
-        self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
+        #self.writer.add_scalars('Loss', {f"{data_to_use}_loss": total_loss}, self.epoch)
+        #self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
+        #self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
 
         self.acc_fn.reset()
         self.auc_fn.reset()
-
-        return total_loss.cpu().detach().numpy(), iacc.cpu().detach().numpy(), iauc.cpu().detach().numpy()
 
 
 
@@ -386,12 +375,8 @@ class RunModel(object):
 
                 pred = self.model(X, self.policy)
                 test_loss += self.loss_fn(pred, y)
-                if self.n_classes > 1:
-                    acc = self.acc_fn(pred, torch.argmax(y.squeeze(), dim=1))
-                    auc = self.auc_fn(pred, torch.argmax(y.squeeze(), dim=1))
-                else:
-                    acc = self.acc_fn(pred, y)
-                    auc = self.auc_fn(pred, y)
+                acc = self.acc_fn(pred, y)
+                auc = self.auc_fn(pred, y)
                 
                 print(f"[{batch+1}/{num_batches}][{'='*int((100*((batch+1)/num_batches))//5) + '.'*int((100*((num_batches-(batch+1))/num_batches))//5)}]", end='\r')
                 #print(f"[{batch+1}/{num_batches}][{'='*(batch+1) + '.'*(num_batches-(batch+1))}]", end='\r')
@@ -408,64 +393,19 @@ class RunModel(object):
               f"        {data_to_use.capitalize()} AUC: {iauc:>0.3f} \u00B1 {iauc_err:>0.2}")
 
   
-        self.writer.add_scalars('Loss', {f"{data_to_use}_loss": test_loss}, self.epoch)
-        self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
-        self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
+        #self.writer.add_scalars('Loss', {f"{data_to_use}_loss": test_loss}, self.epoch)
+        #self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
+        #self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
         #self.writer.add_scalars('ACC', {f"{data_to_use}_pos_err_acc": iacc + iacc_err}, self.epoch)
         #self.writer.add_scalars('ACC', {f"{data_to_use}_neg_err_acc": iacc - iacc_err}, self.epoch)
         #self.writer.add_scalars('AUC', {f"{data_to_use}_pos_err_auc": iauc + iauc_err}, self.epoch)
         #self.writer.add_scalars('AUC', {f"{data_to_use}_neg_err_auc": iauc - iauc_err}, self.epoch)
 
-        if data_to_use == 'val':
-            if self.epoch >= 30:
-                if (iacc > self.best_acc or test_loss < self.best_loss or (iacc+iauc)>self.best_sum):
-                    if (iacc+iauc) > self.best_sum:
-                        self.best_sum = iacc+iauc
-                    if iacc > self.best_acc:
-                        self.best_acc = iacc
-                    if test_loss < self.best_loss:
-                        self.best_loss = test_loss
-                    out_path = os.path.join(self.log_dir, f"best_model_{self.epoch}_{test_loss:0.2f}_{iacc:>0.2f}_{iauc:>0.2f}.pth")
-                    if self.spottune:
-                        #torch.save({
-                        #    'model_state_dict': self.model.state_dict(),
-                        #    'agent_state_dict': self.agent.state_dict(),
-                        #    'optimizer_state_dict': self.optimizer.state_dict(),
-                        #    'agent_optimizer_state_dict': self.agent_optimizer.state_dict(),
-                        #    'gen_params': self.gen_params,
-                        #    'config' : self.config,
-                        #    'epoch': self.epoch,
-                        #    'loss': test_loss}, out_path)
-                        self.best_model = {
-                            'model_state_dict': copy.deepcopy(self.model.state_dict()),
-                            'agent_state_dict': copy.deepcopy(self.agent.state_dict()),
-                            'optimizer_state_dict': copy.deepcopy(self.optimizer.state_dict()),
-                            'agent_optimizer_state_dict': copy.deepcopy(self.agent_optimizer.state_dict()),
-                            'gen_params': self.gen_params,
-                            'config' : self.config,
-                            'epoch': self.epoch,
-                            'loss': test_loss}
-
-                    else:
-                        #torch.save({
-                        #    'model_state_dict': self.model.state_dict(),
-                        #    'optimizer_state_dict': self.optimizer.state_dict(),
-                        #    'gen_params': self.gen_params,
-                        #    'config' : self.config,
-                        #    'epoch': self.epoch,
-                        #    'loss': test_loss}, out_path)
-                        self.best_model = {
-                            'model_state_dict': copy.deepcopy(self.model.state_dict()),
-                            'optimizer_state_dict': copy.deepcopy(self.optimizer.state_dict()),
-                            'gen_params': self.gen_params,
-                            'config' : self.config,
-                            'epoch': self.epoch,
-                            'loss': test_loss}
-
         self.acc_fn.reset()
         self.auc_fn.reset()
         self.policy = None
-        return test_loss.cpu().detach().numpy(), iacc.cpu().detach().numpy(), iacc_err.cpu().detach().numpy(), iauc.cpu().detach().numpy(), iauc_err.cpu().detach().numpy()
+        return test_loss.cpu().detach().numpy(), iacc.cpu().detach().numpy(), iauc.cpu().detach().numpy()
+
 
     def adjust_temp(self):
         for i, step in enumerate(self.temp_steps):
@@ -482,26 +422,44 @@ class RunModel(object):
         print(f"random status: {self.seed_switch}")
 
 
-    def run(self):
-        out_csv = []
-        out_csv.append(f"epoch,train_loss,train_acc,train_auc,val_loss,val_acc,val_auc\n")
-        self.epoch = 0
+    def run(self, config):
+
+        self.config['learning_rate'] = config['learning_rate']
+        self.config['agent_learning_rate'] = config['agent_learning_rate']
+        self.config['temp_vals'] = config['temp_vals']
+        self.config['lr_steps'] = config['lr_steps']
+
+        self.set_model(model_name='spottune', transfer=True)
+        self.set_agent()
+
+        checkpoint = session.get_checkpoint()
+
+        if checkpoint:
+            checkpoint_state = checkpoint.to_dict()
+            self.epoch = checkpoint_state['epoch']
+            self.model.load_state_dict(checkpoint_state['model_state_dict'])
+            self.agent.load_state_dict(checkpoint_state['agent_state_dict'])
+            self.optimizer.load_state_dict(checkpoint_state['optimizer_state_dict'])
+            self.agent_optimizer.load_state_dict(checkpoint_state['agent_optimizer_state_dict'])
+        else:
+            self.epoch = 0
+
         self.adjust_temp()
         self.adjust_seed()
         if self.seed_switch == 'high':
             torch.manual_seed(self.seed)
-        for t in range(self.n_epochs):
+        for t in range(self.epoch, self.n_epochs):
             print(f"Epoch {t+1}/{self.n_epochs}")
             self.epoch = t + 1
             self.adjust_temp()
             self.adjust_seed()
             if self.seed_switch == 'mid':
                 torch.manual_seed(self.seed)
-            train_results = self.train('train')
+            self.train('train')
             if self.seed_switch == 'mid':
                 torch.manual_seed(self.seed)
             #torch.manual_seed(self.seed)
-            val_results = self.test('val')
+            val_loss, val_acc, val_auc = self.test('val')
             if self.config['lr_sched']:
                 print('sched step')
                 #self.lr_sched.step(val_loss)   
@@ -509,9 +467,23 @@ class RunModel(object):
                 if self.spottune:
                     #self.agent_lr_sched.step(val_loss)
                     self.agent_lr_sched.step()
-        
-            out_csv.append(f"{self.epoch},{train_results[0]},{train_results[1]},{train_results[2]},{val_results[0]},{val_results[1]},{val_results[2]}\n")
+
+            checkpoint_data = { 
+                               "epoch": t,
+                               "model_state_dict": self.model.state_dict(),
+                               "agent_state_dict": self.agent.state_dict(),
+                               "optimizer_state_dict": self.optimizer.state_dict(),
+                               "agent_optimizer_state_dict": self.agent_optimizer.state_dict()
+                              }
+            checkpoint = Checkpoint.from_dict(checkpoint_data)
+            session.report({
+                            "loss": val_loss,
+                            "acc": val_acc,
+                            "auc": val_auc,
+                            "acc_auc": val_acc + val_auc
+                           }, checkpoint=checkpoint)
             print(f"-----------------------------------------------------------")
+
         self.epoch += 1
         print("Train Total")
         if self.seed_switch == 'mid':
@@ -525,24 +497,18 @@ class RunModel(object):
         if self.seed_switch == 'mid':
             torch.manual_seed(self.seed)
         self.test('test')
-        if self.spottune:
-            torch.save({'model_state_dict': self.model.state_dict(),
-                        'agent_state_dict': self.agent.state_dict(),
-                        'gen_params': self.gen_params,
-                        'config'    : self.config, 
-                        'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
-            torch.save(self.best_model, os.path.join(self.log_dir, 'best_model.pth'))
-        else:
-            torch.save({'model_state_dict': self.model.state_dict(),
-                        'gen_params': self.gen_params,
-                        'config'    : self.config, 
-                        'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
-            torch.save(self.best_model, os.path.join(self.log_dir, 'best_model.pth'))
+        #if self.spottune:
+        #    torch.save({'model_state_dict': self.model.state_dict(),
+        #                'agent_state_dict': self.agent.state_dict(),
+        #                'gen_params': self.gen_params,
+        #                'config'    : self.config, 
+        #                'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
+        #else:
+        #    torch.save({'model_state_dict': self.model.state_dict(),
+        #                'gen_params': self.gen_params,
+        #                'config'    : self.config, 
+        #                'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
         print("Done")
-        out_csv.append(f"{self.config}\n")
-        out_csv.append(f"{self.gen_params}\n")
-        with open(f"{self.log_dir}/results.csv", 'w') as out_file:
-            out_file.writelines(out_csv)
 
 
     def predict(self, data_to_use='test'):
@@ -581,31 +547,16 @@ class RunModel(object):
     def test_average(self, data_to_use='test'):
         torch.manual_seed(self.seed)
         tests = []
-        random_gen = np.random.default_rng(self.seed)
-        
-        for i in range(100):
-            print(i)
-            #i_rand = random_gen.integers(1, high=1000)
-            #print(i_rand)
 
-            #torch.manual_seed(i_rand)
+        for i in range(100):
+            print(i+1)
             tests.append(self.test(data_to_use))
-            print(tests[i])
 
         tests = np.array(tests)
 
-        acc_err = np.sqrt(np.sum(tests[:,2]**2))/len(tests)
-        auc_err = np.sqrt(np.sum(tests[:,2]**2))/len(tests)
-        
-        acc_std = np.std(tests[:,1])
-        auc_std = np.std(tests[:,3])
-
-        acc_tot_err = np.sqrt(acc_err**2 + acc_std**2)
-        auc_tot_err = np.sqrt(acc_err**2 + acc_std**2)
-
-        print(f"Average loss: {np.mean(tests[:,0]):>0.3f} {np.std(tests[:,0]):>0.3f}")
-        print(f"Average ACC : {np.mean(tests[:,1]):>0.3f} {acc_tot_err:>0.3f}")
-        print(f"Average AUC : {np.mean(tests[:,3]):>0.3f} {auc_tot_err:>0.3f}")
+        print(f"Average loss: {np.mean(tests[:,0])} {np.std(tests[:,0])}")
+        print(f"Average ACC : {np.mean(tests[:,1])} {np.std(tests[:,1])}")
+        print(f"Average AUC : {np.mean(tests[:,2])} {np.std(tests[:,2])}")
         
         return tests
 

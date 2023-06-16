@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import SimpleITK as sitk
 from collections import OrderedDict
-import joblib
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.decomposition import PCA
@@ -41,8 +40,8 @@ def retrieve_patients(csv_dir, image_dir_, modality='DSC', classifier='MGMT'):
         survival = class_of_interest.drop(class_of_interest[class_of_interest == 'Not Available'].index)
         survival = pd.DataFrame(survival, dtype=int)
         survival['survival_bin'] = pd.cut(x=survival[classifier], 
-                                          #bins = [0, 100, 200, 300, 400, 500, 700, np.inf])
-                                          bins = [0, 365, 730, 1095, 1460, 1825, np.inf])
+                                          bins = [0, 100, 200, 300, 400, 500, 700, np.inf])
+                                          #bins = [0, 365, 730, 1095, 1460, 1825, np.inf])
         final_class = pd.get_dummies(survival['survival_bin'])
 
     if 'npy' in modality:
@@ -870,35 +869,42 @@ def scale_and_split_comb(df, do_pca=False, do_corr=False, n_cat=1):
     return X_train, X_test, y_train, y_test, X_scaled, y, n_components
 
 
-def split_image(df, do_pca=False, do_corr=False, n_cat=1, for_scaling=False):
+def split_image(df, n_cat=1):
     """
     splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
     """
     # separate out the inputs and lab#els 
     #y = df[['Methylated', 'Unmethylated']]
-    y = df[['Methylated']]
-    if for_scaling:
-        X = df[['ED', 'ET', 'NC', 'Full']]
-    else:
-        X = df.index
 
+    if n_cat==1:
+        y = df[['Methylated']]
+    else:
+        y = df
+    y_columns = y.columns.to_list()
+    X = df.index
     y = y.to_numpy()
     
     # Separate into train and test datasets.
     # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+    X_kfold = X_train
+    y_kfold = y_train
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25, random_state=42, stratify=y_train)
+    
+    kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    kfold.get_n_splits(X_kfold, y_kfold)
     
     #y_train = pd.DataFrame(y_train, index=X_train, columns=['Methylated', 'Unmethylated'])
     #y_test = pd.DataFrame(y_test, index=X_test, columns=['Methylated', 'Unmethylated'])
     #y_val = pd.DataFrame(y_val, index=X_val, columns=['Methylated', 'Unmethylated'])
-    y_train = pd.DataFrame(y_train, index=X_train, columns=['Methylated'])
-    y_test = pd.DataFrame(y_test, index=X_test, columns=['Methylated'])
-    y_val = pd.DataFrame(y_val, index=X_val, columns=['Methylated'])
+    y_train = pd.DataFrame(y_train, index=X_train, columns=y_columns)
+    y_test = pd.DataFrame(y_test, index=X_test, columns=y_columns)
+    y_val = pd.DataFrame(y_val, index=X_val, columns=y_columns)
+    y_kfold = pd.DataFrame(y_kfold, index=X_kfold, columns=y_columns)
     #X_train = X_train[:-2] # remove some patients so it is divisble by 11
     #y_train = y_train[:-2]
 
-    return X_train, X_test, X_val, y_train, y_test, y_val
+    return X_train, X_test, X_val, y_train, y_test, y_val, kfold, X_kfold, y_kfold
 
 
 def get_pc(df, components=0.4):
