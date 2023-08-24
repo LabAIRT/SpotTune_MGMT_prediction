@@ -75,6 +75,15 @@ def retrieve_patients(csv_dir, image_dir_, modality='DSC', classifier='MGMT'):
     return patients
 
 
+def retrieve_radiomics(patients, csv_dir, modality=['DSC_PH']):
+
+    features_csvs = [os.path.join(csv_dir, f) for f in os.listdir(csv_dir) if (f.endswith('.csv') and np.any([m in f for m in modality]))]
+    features_dfs = OrderedDict({os.path.split(f)[-1].strip('.csv'): pd.read_csv(f) for f in features_csvs})
+
+    for f in features_dfs:
+        features_dfs[f].set_index('SubjectID', inplace=True)
+
+
 def retrieve_data(csv_dir, modality='T1'):
     # feature csv locations, genomic info is stored in the clinical info csv
     clinical_info = pd.read_csv(os.path.join(csv_dir, '../UPENN-GBM_clinical_info_v1.0.csv'))
@@ -524,7 +533,6 @@ def convert_image_data_mod(patient_df, modality=['T2', 'FLAIR', 'T1', 'T1GD'], i
 
     rng_noise = np.random.default_rng(42)
     rng_rotate = np.random.default_rng(42)
-
     for pat, row in paths_df.iterrows():
         mod_arr = OrderedDict()
         for aug in augments:
@@ -869,7 +877,7 @@ def scale_and_split_comb(df, do_pca=False, do_corr=False, n_cat=1):
     return X_train, X_test, y_train, y_test, X_scaled, y, n_components
 
 
-def split_image(df, n_cat=1):
+def split_image(df, n_cat=1, n_splits=5):
     """
     splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
     """
@@ -880,6 +888,7 @@ def split_image(df, n_cat=1):
         y = df[['Methylated']]
     else:
         y = df
+
     y_columns = y.columns.to_list()
     X = df.index
     y = y.to_numpy()
@@ -891,7 +900,7 @@ def split_image(df, n_cat=1):
     y_kfold = y_train
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25, random_state=42, stratify=y_train)
     
-    kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    kfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     kfold.get_n_splits(X_kfold, y_kfold)
     
     #y_train = pd.DataFrame(y_train, index=X_train, columns=['Methylated', 'Unmethylated'])
@@ -904,7 +913,72 @@ def split_image(df, n_cat=1):
     #X_train = X_train[:-2] # remove some patients so it is divisble by 11
     #y_train = y_train[:-2]
 
-    return X_train, X_test, X_val, y_train, y_test, y_val, kfold, X_kfold, y_kfold
+    return X_test, y_test, kfold, X_kfold, y_kfold
+
+
+def split_image_v2(csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', image_dir='../../data/upenn_GBM/', n_cat=1, n_splits=5, modality='DSC', seed=42):
+    """
+    splits and scales input dataframe# and outputs as ndarray, assumes binary categories in the first two columns of the dataframe
+    """
+    # separate out the inputs and lab#els 
+    #y = df[['Methylated', 'Unmethylated']]
+
+    modality_dir = os.path.join(image_dir, f"numpy_conversion_{modality}_augmented_channels")
+    dsc_dir = os.path.join(image_dir, f"numpy_conversion_DSC_augmented_channels")
+
+    patients = retrieve_patients(csv_dir, modality_dir, modality='npy', classifier='MGMT')
+    dsc_patients = retrieve_patients(csv_dir, dsc_dir, modality='npy', classifier='MGMT')
+
+    if n_cat==1:
+        mod_y = patients[['Methylated']]
+        dsc_y = dsc_patients[['Methylated']]
+    else:
+        mod_y = patients
+        dsc_y = dsc_patients
+
+    y_columns = mod_y.columns.to_list()
+    dsc_X = dsc_patients.index
+    dsc_y = dsc_y.to_numpy()
+    
+    # Separate into train and test datasets.
+    # train_test_split automatically shuffles and splits the data following predefined sizes can revisit if shuffling is not a good idea
+    X_dsc_train, X_dsc_test, y_dsc_train, y_dsc_test = train_test_split(dsc_X, dsc_y, test_size=0.3, random_state=42, stratify=dsc_y)
+    X_nok_train, X_nok_val, y_nok_train, y_nok_val = train_test_split(X_dsc_train, y_dsc_train, test_size=0.25, random_state=seed, stratify=y_dsc_train)
+    
+    kfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
+    extra_dsc = [pat for pat in dsc_patients.index if pat not in mod_y.index]
+
+    if 'DSC' in modality:
+        X_kfold = X_dsc_train
+        y_kfold = y_dsc_train
+        X_test = X_dsc_test
+        y_test = y_dsc_test
+
+    else:
+        mod_y = mod_y.drop([pat for pat in mod_y.index if pat in dsc_patients.index])
+        mod_X = mod_y.index
+        mod_y = mod_y.to_numpy()
+        mod_X_train, mod_X_test, mod_y_train, mod_y_test = train_test_split(mod_X, mod_y, test_size=0.3, random_state=42, stratify=mod_y)
+
+        X_kfold = mod_X_train.union(X_dsc_train, sort=False)
+        y_kfold = np.concatenate((mod_y_train, y_dsc_train))
+        dsc_to_remove = np.isin(X_kfold, extra_dsc) 
+        X_kfold = X_kfold[~dsc_to_remove]
+        y_kfold = y_kfold[~dsc_to_remove]
+
+        X_test = mod_X_test.union(X_dsc_test, sort=False)
+        y_test = np.concatenate((mod_y_test, y_dsc_test))
+        dsc_to_remove = np.isin(X_test, extra_dsc)
+        X_test = X_test[~dsc_to_remove]
+        y_test = y_test[~dsc_to_remove]
+         
+         
+    kfold.get_n_splits(X_kfold, y_kfold)
+    y_test = pd.DataFrame(y_test, index=X_test, columns=y_columns)
+    y_kfold = pd.DataFrame(y_kfold, index=X_kfold, columns=y_columns)
+
+    return X_test, y_test, kfold, X_kfold, y_kfold
 
 
 def get_pc(df, components=0.4):

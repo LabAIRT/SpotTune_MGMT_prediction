@@ -14,14 +14,12 @@ class DatasetGenerator(torch.utils.data.Dataset):
     """
     generate images for pytorch dataset
     """
-    def __init__(self, data_indices, labels, data_dir='../../data/upenn_GBM/images/NIfTI-files/', csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', modality=['FLAIR'], dim=(70,86,86), n_channels=3, n_classes=1, to_augment=False, make_augment = False, to_encode=False, to_slice=False, to_3D_slice=False, n_slices=10, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, transform=None, target_transform=None):
+    def __init__(self, data_indices, labels, data_dir='../../data/upenn_GBM/images/NIfTI-files/', csv_dir='../../data/upenn_GBM/csvs/radiomic_features_CaPTk/', modality=['FLAIR'], dim=(70,86,86), n_channels=3, channel_idx=None, n_classes=1, to_augment=False, make_augment = False, to_encode=False, to_slice=False, to_3D_slice=False, n_slices=10, augment_types=('noise', 'flip', 'rotate', 'deform'), seed=42, transform=None, target_transform=None, use_clinical=False, use_class_weights=False):
         self.labels = labels
         self.data_indices = data_indices
 
-        if len(modality) > 1:
-            self.n_channels = len(modality)
-        else:
-            self.n_channels = n_channels
+        self.n_channels = n_channels
+        self.channel_idx = channel_idx
         self.n_classes = n_classes
         self.dim = dim
         self.n_slices = n_slices
@@ -40,6 +38,9 @@ class DatasetGenerator(torch.utils.data.Dataset):
         self.to_slice = to_slice
         self.transform = transform
         self.target_transform = target_transform
+        self.use_clinical = use_clinical
+        self.use_class_weights = use_class_weights
+        self.class_weights = None
 
         if self.to_encode:
             if self.modality[0] == 'mod':
@@ -55,38 +56,59 @@ class DatasetGenerator(torch.utils.data.Dataset):
             temp_scaled = scaler.fit_transform(self.radiomics)
 
             self.radiomics = pd.DataFrame(temp_scaled, columns=temp_column, index=temp_index)
-        
+
+        if self.use_clinical:
+            self.clinical_input = pd.read_csv(f"{self.csv_dir}/clinical_inputs.csv")
+            self.clinical_input.set_index('ID', inplace=True)
+            self.clinical_input = self.clinical_input.loc[self.data_indices]
+
         if self.to_augment:
             augment_idx = {}
             for aug in self.augment_types:
                 augment_idx[aug] = self.labels.copy(deep=True)
                 augment_idx[aug].index = augment_idx[aug].index+'_'+aug
 
+                
                 self.data_indices = self.data_indices.append(augment_idx[aug].index)
 
             self.labels = pd.concat([self.labels, *augment_idx.values()])
+
+            if self.use_clinical:
+                clinical_aug_idx = {}
+                for aug in self.augment_types:
+                    clinical_aug_idx[aug] = self.clinical_input.copy(deep=True)
+                    clinical_aug_idx[aug].index = clinical_aug_idx[aug].index+'_'+aug
+
+                self.clinical_input = pd.concat([self.clinical_input, *clinical_aug_idx.values()])
             
             # number of negatives to remove to even out labels
             # its easier to augment and then randomly remove up to a certain amount than to add a radom
             # assortment of augmentations on top of what is already there.
-            if self.n_classes < 2:
-                to_remove = int(len(self.labels) - 2*np.sum(self.labels))
+            if self.use_class_weights:
+                self.class_weights = [len(self.labels[self.labels==0]) / np.sum(self.labels)]
+            else:
+                if self.n_classes < 2:
+                    to_remove = int(len(self.labels) - 2*np.sum(self.labels))
 
-                # patient indices to remove, randomly sampled
-                if to_remove > 0:
-                    idx_to_remove = self.labels[self.labels==0].dropna().sample(frac=1, random_state=42)[-to_remove:].index.tolist()
-                elif to_remove < 0:
-                    idx_to_remove = self.labels[self.labels==1].dropna().sample(frac=1, random_state=42)[-to_remove:].index.tolist()
-                else:
-                    idx_to_remove = []
+                    # patient indices to remove, randomly sampled
+                    if to_remove > 0:
+                        idx_to_remove = self.labels[self.labels==0].dropna().sample(frac=1, random_state=42)[-to_remove:].index.tolist()
+                    elif to_remove < 0:
+                        idx_to_remove = self.labels[self.labels==1].dropna().sample(frac=1, random_state=42)[-to_remove:].index.tolist()
+                    else:
+                        idx_to_remove = []
 
-                self.labels = self.labels.drop(idx_to_remove)
-                self.data_indices = self.data_indices.drop(idx_to_remove)
+                    self.labels = self.labels.drop(idx_to_remove)
+                    self.data_indices = self.data_indices.drop(idx_to_remove)
+                    if self.use_clinical:
+                        self.clinical_input = self.clinical_input.drop(idx_to_remove)
 
         else:
             idx_to_remove = [label for label in self.labels.index.tolist() if len(label.split('_'))>2]
             self.labels = self.labels.drop(idx_to_remove)
             self.data_indices = self.data_indices.drop(idx_to_remove)
+            if self.use_clinical:
+                self.clinical_input = self.clinical_input.drop(idx_to_remove)
             
 
 
@@ -103,6 +125,9 @@ class DatasetGenerator(torch.utils.data.Dataset):
 
         pat_idx = self.labels.index.values[idx]
         label = self.labels.loc[pat_idx]
+
+        if self.use_clinical:
+            clinical = self.clinical_input.loc[pat_idx]
 
         # retrieve array (image) based on number of modalities
         if len(self.modality) < 2:
@@ -138,6 +163,11 @@ class DatasetGenerator(torch.utils.data.Dataset):
                                                    (0, n_pad_width)),
                                                    mode='constant', constant_values=0)
 
+        if self.channel_idx:
+            if type(self.channel_idx) is int:
+                in_arr = in_arr[self.channel_idx:self.channel_idx+1]
+            elif type(self.channel_idx) is list:
+                in_arr = in_arr[self.channel_idx] 
         if len(in_arr) > self.n_channels:
             in_arr = in_arr[:self.n_channels]
         #if self.n_channels == 4:
@@ -146,10 +176,13 @@ class DatasetGenerator(torch.utils.data.Dataset):
             in_arr = self.transform(in_arr)
         if self.target_transform:
             label = self.target_transform(label)
-        if self.n_channels == 1:
-            in_arr = np.expand_dims(in_arr, axis=0)
-     
-        return torch.from_numpy(in_arr), torch.tensor(label)
+        #if self.n_channels == 1:
+        #    in_arr = np.expand_dims(in_arr, axis=0)
+    
+        if self.use_clinical:
+            return (torch.from_numpy(in_arr), torch.tensor(clinical)), torch.tensor(label)
+        else:
+            return torch.from_numpy(in_arr), torch.tensor(label)
 
 
     def get_pat_array(self, pat_idx):

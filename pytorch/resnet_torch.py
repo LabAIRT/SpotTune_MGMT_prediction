@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import torch
 from torch import nn
+import math
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, channels, stride=1, dilation=1):
@@ -114,6 +115,15 @@ class ResNet3D18(nn.Module):
         self.dense3 = nn.Linear(64, 32)
         self.classify = nn.Linear(32, 1)
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2./n))
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+
     def forward(self, x, policy=None):
         x = self.conv1(x)
         x = self.bn1(x)
@@ -173,6 +183,14 @@ class ResNet3D50(nn.Module):
         #self.dense3 = nn.Linear(64, 32)
         self.classify = nn.Linear(512*self.expansion, 1)
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2./n))
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
     def forward(self, x, policy=None):
         residual = x
 
@@ -199,6 +217,76 @@ class ResNet3D50(nn.Module):
         return x
 
 
+class ResNet3D50_clinical(nn.Module):
+    def __init__(self, in_channels=3, dropout=0.3):
+        super(ResNet3D50_clinical, self).__init__()
+        self.expansion = 4
+        self.conv1 = nn.Conv3d(in_channels, 64, kernel_size=(7,7,7), stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm3d(64)
+        self.relu = nn.ReLU()
+        self.pool = nn.MaxPool3d(kernel_size=(3,3,3), stride=2, dilation=1, padding=1)
+        self.layer1 = nn.Sequential(
+            Bottleneck(64, 64),
+            Bottleneck(256, 64),
+            Bottleneck(256, 64))
+        self.layer2 = nn.Sequential(
+            Bottleneck(256, 128, stride=2),
+            Bottleneck(512, 128),
+            Bottleneck(512, 128),
+            Bottleneck(512, 128))
+        self.layer3 = nn.Sequential(
+            Bottleneck(512, 256, stride=1, dilation=2),
+            Bottleneck(1024, 256),
+            Bottleneck(1024, 256),
+            Bottleneck(1024, 256),
+            Bottleneck(1024, 256),
+            Bottleneck(1024, 256))
+        self.layer4 = nn.Sequential(
+            Bottleneck(1024, 512, stride=1, dilation=4),
+            Bottleneck(2048, 512),
+            Bottleneck(2048, 512))
+        self.avgpool = nn.AdaptiveAvgPool3d((1,1,1))
+        #self.dense1 = nn.Linear(512*self.expansion, 128)
+        #self.dropout = nn.Dropout(dropout)
+        #self.dense2 = nn.Linear(128, 64)
+        #self.dense3 = nn.Linear(64, 32)
+        self.classify = nn.Linear(512*self.expansion+3, 1)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2./n))
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def forward(self, x, policy=None):
+        x2 = x[1]
+        x = x[0]
+        residual = x
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.pool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        #x = self.dense1(x)
+        #x = self.dropout(x)
+        #x = self.dense2(x)
+        #x = self.dropout(x)
+        #x = self.dense3(x)
+        #x = self.dropout(x)
+        x = torch.cat((x, x2), 1)
+        x = self.classify(x)
+
+        return x
             
 
 

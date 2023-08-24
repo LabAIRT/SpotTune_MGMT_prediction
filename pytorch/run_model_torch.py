@@ -14,8 +14,9 @@ import torchvision
 import torchmetrics
 
 from gbm_project.pytorch.dataset_class import DatasetGenerator
-from gbm_project.pytorch.resnet_torch import ResNet3D18, ResNet3D50
+from gbm_project.pytorch.resnet_torch import ResNet3D18, ResNet3D50, ResNet3D50_clinical
 from gbm_project.pytorch.resnet_spottune import resnet_spottune, resnet_agent
+import gbm_project.pytorch.resnet_spottune_clinical as clinical_resnet
 
 from MedicalNet.models import resnet
 from gbm_project.pytorch.spottune_layer_translation_cfg import layer_loop, layer_loop_downsample
@@ -35,6 +36,7 @@ class RunModel(object):
         self.spottune = config['spottune']
         self.n_channels = gen_params['n_channels']
         self.n_classes = gen_params['n_classes']
+        self.use_clinical = gen_params['use_clinical']
         self.gumbel_temperature = config['gumbel_temperature']
         self.policy = None
         self.gen_params = gen_params
@@ -47,6 +49,7 @@ class RunModel(object):
         self.seed_vals = config['seed_vals']
         self.temp_steps = config['temp_steps']
         self.temp_vals = config['temp_vals']
+        self.class_weights = None
         
         if self.n_classes == 1:
             self.loss_fn = nn.BCEWithLogitsLoss().to(self.device)
@@ -78,8 +81,16 @@ class RunModel(object):
                 self.model = ResNet3D18(in_channels=self.gen_params['n_channels'], 
                                         dropout=self.config['dropout']).to(self.device)
             elif model_name == 'ResNet50':
-                self.model = ResNet3D50(in_channels=self.gen_params['n_channels'], 
-                                        dropout=self.config['dropout']).to(self.device)
+                if self.use_clinical:
+                    self.model = clinical_resnet.resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
+                else:
+                    self.model = resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
+                #if self.use_clinical:
+                #    self.model = ResNet3D50_clinical(in_channels=self.gen_params['n_channels'], 
+                #                        dropout=self.config['dropout']).to(self.device)
+                #else:
+                #    self.model = ResNet3D50(in_channels=self.gen_params['n_channels'], 
+                #                        dropout=self.config['dropout']).to(self.device)
             else:
                 print("no model chosen, choose from:")
                 print(f"{MODELS}")
@@ -106,11 +117,20 @@ class RunModel(object):
 
 #####################################################################################################
             elif model_name == 'MedResNet50':
-                self.model = resnet.resnet50(sample_input_D=self.config['dim'][0],
-                                             sample_input_H=self.config['dim'][1],
-                                             sample_input_W=self.config['dim'][2],
-                                             num_seg_classes=1,
-                                             shortcut_type='B').to(self.device)
+                if self.use_clinical:
+                    self.model = resnet.resnet50_clinical(sample_input_D=self.config['dim'][0],
+                                                 sample_input_H=self.config['dim'][1],
+                                                 sample_input_W=self.config['dim'][2],
+                                                 num_seg_classes=1,
+                                                 num_channels=self.n_channels,
+                                                 shortcut_type='B').to(self.device)
+                else:
+                    self.model = resnet.resnet50(sample_input_D=self.config['dim'][0],
+                                                 sample_input_H=self.config['dim'][1],
+                                                 sample_input_W=self.config['dim'][2],
+                                                 num_seg_classes=1,
+                                                 num_channels=self.n_channels,
+                                                 shortcut_type='B').to(self.device)
                 # remove default conv_seg, replace with dense classification layers
                 initial_state = torch.load('./MedicalNet/pretrain/resnet_50.pth', map_location=self.device)['state_dict']
                 # remove module prefix from keys
@@ -120,7 +140,7 @@ class RunModel(object):
                 if self.n_channels > 1:
                     fixed_state['conv1.weight'] = fixed_state['conv1.weight'].repeat(1,self.n_channels,1,1,1)/self.n_channels
                 self.model.load_state_dict(fixed_state, strict=False)
-                self.freeze_layers(ignore=freeze_ignore)
+                #self.freeze_layers(ignore=freeze_ignore)
 
 ######################################################################################################
             elif model_name == 'MedResNet101':
@@ -165,7 +185,11 @@ class RunModel(object):
             elif model_name == 'spottune':
                 if not self.spottune:
                     self.spottune = True
-                self.model = resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
+
+                if self.use_clinical:
+                    self.model = clinical_resnet.resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
+                else:
+                    self.model = resnet_spottune(num_classes=self.n_classes, in_channels=self.n_channels, dropout=self.config['dropout']).to(self.device)
 
                 initial_state = torch.load('./MedicalNet/pretrain/resnet_50.pth', map_location=self.device)['state_dict']
 
@@ -240,15 +264,18 @@ class RunModel(object):
              
         # set the optimizer here, since it needs the model parameters in its initialization
         self.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.config['learning_rate'], weight_decay=self.config['l2_reg'])
-        #self.lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=self.config['lr_factor'], patience=self.config['lr_patience'], verbose=True)
-        self.lr_sched = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.config['lr_steps'], gamma=self.config['lr_factor'], verbose=True)
+        self.lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=self.config['lr_factor'], patience=self.config['lr_patience'], verbose=True)
+        #self.lr_sched = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.config['lr_steps'], gamma=self.config['lr_factor'], verbose=True)
 
 
     def set_agent(self):
-        self.agent = resnet_agent(num_classes=(sum(self.model.layers)*2), in_channels=self.n_channels, dropout=self.config['agent_dropout']).to(self.device)
+        if self.use_clinical:
+            self.agent = clinical_resnet.resnet_agent(num_classes=(sum(self.model.layers)*2), in_channels=self.n_channels, dropout=self.config['agent_dropout']).to(self.device)
+        else:
+            self.agent = resnet_agent(num_classes=(sum(self.model.layers)*2), in_channels=self.n_channels, dropout=self.config['agent_dropout']).to(self.device)
         self.agent_optimizer = torch.optim.Adam(self.agent.parameters(), lr=self.config['agent_learning_rate'], weight_decay=self.config['agent_l2_reg'])
-        #self.agent_lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(self.agent_optimizer, factor=self.config['agent_lr_factor'], patience=self.config['agent_lr_patience'], verbose=True)
-        self.agent_lr_sched = torch.optim.lr_scheduler.MultiStepLR(self.agent_optimizer, milestones=self.config['lr_steps'], gamma=self.config['lr_factor'], verbose=True)
+        self.agent_lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(self.agent_optimizer, factor=self.config['lr_factor'], patience=self.config['lr_patience'], verbose=True)
+        #self.agent_lr_sched = torch.optim.lr_scheduler.MultiStepLR(self.agent_optimizer, milestones=self.config['lr_steps'], gamma=self.config['lr_factor'], verbose=True)
 
 
     def freeze_layers(self, ignore=['conv_seg']):
@@ -256,11 +283,14 @@ class RunModel(object):
         Freeze all layers except for those in the ignore list. Function can be tuned later when attempting to implement the adaptive transfer learning
         '''
         #make sure modules in the ignore list are still trainable
-        for name, p in self.model.named_parameters():
-            if any([i in name for i in ignore]):
-                p.requires_grad = True
-            else:
-                p.requires_grad = False
+        if ignore[0] == 'all':
+            self.unfreeze_layers()
+        else:
+            for name, p in self.model.named_parameters():
+                if any([i in name for i in ignore]):
+                    p.requires_grad = True
+                else:
+                    p.requires_grad = False
 
 
     def unfreeze_layers(self, ignore=[]):
@@ -279,7 +309,6 @@ class RunModel(object):
         self.train_data = DatasetGenerator(X_train, y_train, **self.gen_params)
         self.train_dataloader = DataLoader(self.train_data, batch_size=self.batch_size, shuffle=True, pin_memory=True)
 
-
     def set_val_data(self, X_val, y_val):
         self.gen_params['to_augment'] = False
         self.val_data = DatasetGenerator(X_val, y_val, **self.gen_params)
@@ -292,6 +321,9 @@ class RunModel(object):
         self.test_dataloader = DataLoader(self.test_data, batch_size=self.batch_size, shuffle=False, pin_memory=True)
 
 
+    def set_loss_fn(self):
+        self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(self.train_data.class_weights)).to(self.device)
+         
     def train(self, data_to_use='train'):
         if data_to_use == 'train':
             dataloader = self.train_dataloader
@@ -309,7 +341,10 @@ class RunModel(object):
         
         for batch, (X, y) in enumerate(dataloader):
             #torch.manual_seed(self.seed)
-            X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
+            if self.use_clinical:
+                X, y = (X[0].to(self.device, dtype=torch.float), X[1].to(self.device, dtype=torch.float)), y.to(self.device, dtype=torch.float)
+            else:
+                X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
 
             if self.spottune:
                 probs = self.agent(X)
@@ -328,7 +363,7 @@ class RunModel(object):
                 acc = self.acc_fn(pred, y)
                 auc = self.auc_fn(pred, y)
         
-            #Backpropagate
+        #Backpropagate
             self.optimizer.zero_grad()
             if self.spottune:
                 self.agent_optimizer.zero_grad()
@@ -377,7 +412,10 @@ class RunModel(object):
 
         with torch.no_grad():
             for batch, (X, y) in enumerate(dataloader):
-                X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
+                if self.use_clinical:
+                    X, y = (X[0].to(self.device, dtype=torch.float), X[1].to(self.device, dtype=torch.float)), y.to(self.device, dtype=torch.float)
+                else:
+                    X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
 
                 if self.spottune:
                     probs = self.agent(X)
@@ -417,14 +455,12 @@ class RunModel(object):
         #self.writer.add_scalars('AUC', {f"{data_to_use}_neg_err_auc": iauc - iauc_err}, self.epoch)
 
         if data_to_use == 'val':
-            if self.epoch >= 30:
-                if (iacc > self.best_acc or test_loss < self.best_loss or (iacc+iauc)>self.best_sum):
+            #if self.epoch >= 30:
+                if (iacc > self.best_acc or (iacc+iauc)>self.best_sum):
                     if (iacc+iauc) > self.best_sum:
                         self.best_sum = iacc+iauc
                     if iacc > self.best_acc:
                         self.best_acc = iacc
-                    if test_loss < self.best_loss:
-                        self.best_loss = test_loss
                     out_path = os.path.join(self.log_dir, f"best_model_{self.epoch}_{test_loss:0.2f}_{iacc:>0.2f}_{iauc:>0.2f}.pth")
                     if self.spottune:
                         #torch.save({
@@ -504,11 +540,11 @@ class RunModel(object):
             val_results = self.test('val')
             if self.config['lr_sched']:
                 print('sched step')
-                #self.lr_sched.step(val_loss)   
-                self.lr_sched.step()   
+                self.lr_sched.step(val_results[1]+val_results[3])   
+                #self.lr_sched.step()   
                 if self.spottune:
-                    #self.agent_lr_sched.step(val_loss)
-                    self.agent_lr_sched.step()
+                    self.agent_lr_sched.step(val_results[1]+val_results[3])
+                    #self.agent_lr_sched.step()
         
             out_csv.append(f"{self.epoch},{train_results[0]},{train_results[1]},{train_results[2]},{val_results[0]},{val_results[1]},{val_results[2]}\n")
             print(f"-----------------------------------------------------------")
@@ -550,7 +586,7 @@ class RunModel(object):
             dataloader = self.test_dataloader
         elif data_to_use == 'train':
             dataloader = self.train_dataloader
-        elif data_to_use == 'tal':
+        elif data_to_use == 'val':
             dataloader = self.val_dataloader
 
         self.model.eval()
@@ -560,7 +596,10 @@ class RunModel(object):
         true_val = []
         with torch.no_grad():
             for batch, (X, y) in enumerate(dataloader):
-                X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
+                if self.use_clinical:
+                    X, y = (X[0].to(self.device, dtype=torch.float), X[1].to(self.device, dtype=torch.float)), y.to(self.device, dtype=torch.float)
+                else:
+                    X, y = X.to(self.device, dtype=torch.float), y.to(self.device, dtype=torch.float)
 
                 if self.spottune:
                     probs = self.agent(X)
@@ -588,7 +627,7 @@ class RunModel(object):
             #i_rand = random_gen.integers(1, high=1000)
             #print(i_rand)
 
-            #torch.manual_seed(i_rand)
+            torch.manual_seed(i)
             tests.append(self.test(data_to_use))
             print(tests[i])
 

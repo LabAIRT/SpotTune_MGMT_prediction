@@ -15,16 +15,17 @@ model_config = {
                 "no_freeze": ['conv_seg'],
                 "spottune": True,
                 "lr_sched": True,
-                "lr_factor": 0.1,
                 "lr_steps": [30],
-                "lr_patience": 5,
+                "lr_factor": 0.1,
+                "lr_patience": 10,
                 "gumbel_temperature": 1e4,
                 "temp_steps": [0],
-                "temp_vals": [1e4],
+                "temp_vals": [1e2],
                 "seed_switch": "high", # low/mid/high randomness
                 "seed_steps": [0, 50],
                 "seed_vals": ["high", "med"],
-                "log_dir": None
+                "log_dir": None,
+                "split_seed": 42,
                }
 
 
@@ -49,9 +50,10 @@ gen_params = {
               'to_slice': False,
               'to_3D_slice': False,
               'n_slices': 10,
-              #'augment_types': ('flip', 'rotate', 'deform')
-              'augment_types': ('flip', 'rotate', 'noise', 'deform')
-              #'augment_types': ('flip', 'rotate', 'noise', 'deform', 'rotate2', 'rotate3', 'rotate4', 'rotate5')
-              #'augment_types': ('flip', 'rotate', 'noise', 'deform', 'flip+rotate', 'flip+noise', 'flip+deform', 'rotate+noise', 'rotate+deform', 'noise+deform')
-              #'augment_types': ('flip', 'rotate', 'deform', 'noise')
+              'use_clinical': False,
+              #'augment_types': ('flip', 'rotate', 'deform'),
+              'augment_types': ('flip', 'rotate', 'noise', 'deform'),
+              #'augment_types': ('flip', 'rotate', 'noise', 'deform', 'rotate2', 'rotate3', 'rotate4', 'rotate5'),
+              #'augment_types': ('flip', 'rotate', 'noise', 'deform', 'flip+rotate', 'flip+noise', 'flip+deform', 'rotate+noise', 'rotate+deform', 'noise+deform'),
+              #'augment_types': ('flip', 'rotate', 'deform', 'noise'),
              }
