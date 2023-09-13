@@ -80,8 +80,16 @@ def retrieve_radiomics(patients, csv_dir, modality=['DSC_PH']):
     features_csvs = [os.path.join(csv_dir, f) for f in os.listdir(csv_dir) if (f.endswith('.csv') and np.any([m in f for m in modality]))]
     features_dfs = OrderedDict({os.path.split(f)[-1].strip('.csv'): pd.read_csv(f) for f in features_csvs})
 
-    for f in features_dfs:
-        features_dfs[f].set_index('SubjectID', inplace=True)
+    full_featues_df = pd.read_csv(features_csvs[0])
+    if len(features_csvs) > 1:
+        for i, f in enumerate(features_csvs):
+            if i < 1: continue
+            full_features_df.join(pd.read_csv(f), how='inner', left_on='SubjectID', right_on='SubjectID')
+
+    full_features_dfs.set_index('SubjectID')
+
+    return
+    
 
 
 def retrieve_data(csv_dir, modality='T1'):

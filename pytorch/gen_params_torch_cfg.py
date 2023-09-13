@@ -26,6 +26,9 @@ model_config = {
                 "seed_vals": ["high", "med"],
                 "log_dir": None,
                 "split_seed": 42,
+                "sen_threshold": 0.5,
+                "spe_threshold": 0.5,
+
                }
 
 

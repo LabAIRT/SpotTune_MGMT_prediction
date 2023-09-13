@@ -55,12 +55,19 @@ class RunModel(object):
             self.loss_fn = nn.BCEWithLogitsLoss().to(self.device)
             self.acc_fn = torchmetrics.classification.BinaryAccuracy(threshold=0.5).to(self.device)
             self.auc_fn = torchmetrics.classification.BinaryAUROC().to(self.device)
+            self.spe_fn = torchmetrics.classification.BinarySpecificity().to(self.device)
+            self.sen_fn = torchmetrics.classification.BinaryRecall().to(self.device)
             self.confusion = torchmetrics.classification.BinaryConfusionMatrix().to(self.device)
         else:
             self.loss_fn = nn.CrossEntropyLoss().to(self.device)
             self.acc_fn = torchmetrics.classification.Accuracy(task='multiclass', num_classes=self.n_classes).to(self.device)
             self.auc_fn = torchmetrics.classification.AUROC(task='multiclass', num_classes=self.n_classes).to(self.device)
+            self.spe_fn = torchmetrics.classification.Specificity(task='multiclass', num_classes=self.n_classes).to(self.device)
+            self.sen_fn = torchmetrics.classification.Recall(task='multiclass', num_classes=self.n_classes).to(self.device)
             self.confusion = torchmetrics.classification.ConfusionMatrix(task='multiclass', num_classes=self.n_classes).to(self.device)
+
+        self.sen_threshold = self.config['sen_threshold']
+        self.spe_threshold = self.config['spe_threshold']
 
         self.log_dir = self.config['log_dir']
         if self.log_dir is None:
@@ -69,7 +76,8 @@ class RunModel(object):
         self.writer = SummaryWriter(self.log_dir)
         print('remember to set the data')
         self.epoch = 0
-        self.best_acc =0.
+        self.best_auc =0.
+        self.best_M =0.
         self.best_loss = 1.0
         self.best_sum = 0.
         self.best_model = None
@@ -140,7 +148,7 @@ class RunModel(object):
                 if self.n_channels > 1:
                     fixed_state['conv1.weight'] = fixed_state['conv1.weight'].repeat(1,self.n_channels,1,1,1)/self.n_channels
                 self.model.load_state_dict(fixed_state, strict=False)
-                #self.freeze_layers(ignore=freeze_ignore)
+                self.freeze_layers(ignore=freeze_ignore)
 
 ######################################################################################################
             elif model_name == 'MedResNet101':
@@ -359,9 +367,13 @@ class RunModel(object):
             if self.n_classes > 1:
                 acc = self.acc_fn(pred, torch.argmax(y.squeeze(), dim=1))
                 auc = self.auc_fn(pred, torch.argmax(y.squeeze(), dim=1))
+                sen = self.sen_fn(pred, torch.argmax(y.squeeze(), dim=1))
+                spe = self.spe_fn(pred, torch.argmax(y.squeeze(), dim=1))
             else:
                 acc = self.acc_fn(pred, y)
                 auc = self.auc_fn(pred, y)
+                sen = self.sen_fn(pred, y)
+                spe = self.spe_fn(pred, y)
         
         #Backpropagate
             self.optimizer.zero_grad()
@@ -381,12 +393,17 @@ class RunModel(object):
         iauc = self.auc_fn.compute()
         total_loss /= num_batches
 
+        ispe = self.spe_fn.compute()
+        isen = self.sen_fn.compute()
+        metric_M = 0.6*isen + 0.4*ispe
+
         print(f"\nAvg Train Loss: {total_loss:>0.4f}; "
               f"Total Train ACC: {iacc:>0.4f}; "
               f"Total Train AUC: {iauc:>0.4f}")    
         self.writer.add_scalars('Loss', {f"{data_to_use}_loss": total_loss}, self.epoch)
         self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
         self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
+        self.writer.add_scalars('M', {f"{data_to_use}_M": metric_M}, self.epoch)
 
         self.acc_fn.reset()
         self.auc_fn.reset()
@@ -427,18 +444,26 @@ class RunModel(object):
                 if self.n_classes > 1:
                     acc = self.acc_fn(pred, torch.argmax(y.squeeze(), dim=1))
                     auc = self.auc_fn(pred, torch.argmax(y.squeeze(), dim=1))
+                    sen = self.sen_fn(pred, torch.argmax(y.squeeze(), dim=1))
+                    spe = self.spe_fn(pred, torch.argmax(y.squeeze(), dim=1))
                 else:
                     acc = self.acc_fn(pred, y)
                     auc = self.auc_fn(pred, y)
+                    sen = self.sen_fn(pred, y)
+                    spe = self.spe_fn(pred, y)
                 
                 print(f"[{batch+1}/{num_batches}][{'='*int((100*((batch+1)/num_batches))//5) + '.'*int((100*((num_batches-(batch+1))/num_batches))//5)}]", end='\r')
                 #print(f"[{batch+1}/{num_batches}][{'='*(batch+1) + '.'*(num_batches-(batch+1))}]", end='\r')
                       
         iacc = self.acc_fn.compute()
         iauc = self.auc_fn.compute()
+        ispe = self.spe_fn.compute()
+        isen = self.sen_fn.compute()
 
         iacc_err = torch.sqrt((1/size)*iacc*(1-iacc))
         iauc_err = torch.sqrt((1/size)*iauc*(1-iauc))
+
+        metric_M = 0.6*isen + 0.4*ispe
 
         test_loss /= num_batches
         print(f"\nAvg {data_to_use.capitalize()}   Loss: {test_loss:>0.3f}; "
@@ -449,6 +474,7 @@ class RunModel(object):
         self.writer.add_scalars('Loss', {f"{data_to_use}_loss": test_loss}, self.epoch)
         self.writer.add_scalars('ACC', {f"{data_to_use}_acc": iacc}, self.epoch)
         self.writer.add_scalars('AUC', {f"{data_to_use}_auc": iauc}, self.epoch)
+        self.writer.add_scalars('M', {f"{data_to_use}_M": metric_M}, self.epoch)
         #self.writer.add_scalars('ACC', {f"{data_to_use}_pos_err_acc": iacc + iacc_err}, self.epoch)
         #self.writer.add_scalars('ACC', {f"{data_to_use}_neg_err_acc": iacc - iacc_err}, self.epoch)
         #self.writer.add_scalars('AUC', {f"{data_to_use}_pos_err_auc": iauc + iauc_err}, self.epoch)
@@ -456,12 +482,14 @@ class RunModel(object):
 
         if data_to_use == 'val':
             #if self.epoch >= 30:
-                if (iacc > self.best_acc or (iacc+iauc)>self.best_sum):
-                    if (iacc+iauc) > self.best_sum:
-                        self.best_sum = iacc+iauc
-                    if iacc > self.best_acc:
-                        self.best_acc = iacc
-                    out_path = os.path.join(self.log_dir, f"best_model_{self.epoch}_{test_loss:0.2f}_{iacc:>0.2f}_{iauc:>0.2f}.pth")
+                #if (iacc > self.best_acc or (iacc+iauc)>self.best_sum):
+                if metric_M > self.best_M and isen > self.sen_threshold and ispe > self.spe_threshold:
+                    #if (iacc+iauc) > self.best_sum:
+                    #    self.best_sum = iacc+iauc
+                    #if iacc > self.best_acc:
+                    #    self.best_acc = iacc
+                    self.best_M = metric_M
+                    out_path = os.path.join(self.log_dir, f"best_model_{self.epoch}_{test_loss:0.2f}_{metric_M:>0.2f}_{iauc:>0.2f}.pth")
                     if self.spottune:
                         #torch.save({
                         #    'model_state_dict': self.model.state_dict(),
@@ -500,6 +528,8 @@ class RunModel(object):
 
         self.acc_fn.reset()
         self.auc_fn.reset()
+        self.sen_fn.reset()
+        self.spe_fn.reset()
         self.policy = None
         return test_loss.cpu().detach().numpy(), iacc.cpu().detach().numpy(), iacc_err.cpu().detach().numpy(), iauc.cpu().detach().numpy(), iauc_err.cpu().detach().numpy()
 
@@ -562,18 +592,22 @@ class RunModel(object):
             torch.manual_seed(self.seed)
         self.test('test')
         if self.spottune:
-            torch.save({'model_state_dict': self.model.state_dict(),
-                        'agent_state_dict': self.agent.state_dict(),
-                        'gen_params': self.gen_params,
-                        'config'    : self.config, 
-                        'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
-            torch.save(self.best_model, os.path.join(self.log_dir, 'best_model.pth'))
+            if self.best_model is None:
+                torch.save({'model_state_dict': self.model.state_dict(),
+                            'agent_state_dict': self.agent.state_dict(),
+                            'gen_params': self.gen_params,
+                            'config'    : self.config, 
+                            'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
+            else:
+                torch.save(self.best_model, os.path.join(self.log_dir, 'best_model.pth'))
         else:
-            torch.save({'model_state_dict': self.model.state_dict(),
-                        'gen_params': self.gen_params,
-                        'config'    : self.config, 
-                        'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
-            torch.save(self.best_model, os.path.join(self.log_dir, 'best_model.pth'))
+            if self.best_model is None:
+                torch.save({'model_state_dict': self.model.state_dict(),
+                            'gen_params': self.gen_params,
+                            'config'    : self.config, 
+                            'model_name': self.model.__class__.__name__}, os.path.join(self.log_dir, 'last_model.pth'))
+            else:
+                torch.save(self.best_model, os.path.join(self.log_dir, 'best_model.pth'))
         print("Done")
         out_csv.append(f"{self.config}\n")
         out_csv.append(f"{self.gen_params}\n")
