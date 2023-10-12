@@ -16,6 +16,7 @@ Notebooks are provided that go through the data prep, training, and evaluation p
 For proper running of the notebooks, they should be placed in the same directory as `gbm_project`
 
 > `cd gbm_project`
+>
 > `cp ./notebooks/* ../`
 
 The notebooks have dataset paths that should be replaced with your own local paths to the UPENN-GBM dataset
