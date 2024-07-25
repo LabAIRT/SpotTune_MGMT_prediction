@@ -22,20 +22,20 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         residual = x
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
 
-        x = self.conv2(x)
-        x = self.bn2(x)
+        out = self.conv2(out)
+        out = self.bn2(out)
 
         if self.stride > 1 or self.dilation > 1:
             residual = self.downsample(residual)
             residual = self.bn0(residual)
-        x += residual
-        x = self.relu(x)
+        out += residual
+        out = self.relu(out)
 
-        return x
+        return out
 
 
 class Bottleneck(nn.Module):
@@ -65,24 +65,24 @@ class Bottleneck(nn.Module):
 
     def forward(self, x):
         residual = x
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
 
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu(x)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
 
-        x = self.conv3(x)
-        x = self.bn3(x)
+        out = self.conv3(out)
+        out = self.bn3(out)
 
         if self.downsample:
             residual = self.downsample(residual)
 
-        x += residual
-        x = self.relu(x)
+        out += residual
+        out = self.relu(out)
 
-        return x
+        return out
 
 
 
