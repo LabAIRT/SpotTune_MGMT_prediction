@@ -19,4 +19,8 @@ For proper running of the notebooks, they should be placed in the same directory
 >
 > `cp ./notebooks/* ../`
 
-The notebooks have dataset paths that should be replaced with your own local paths to the UPENN-GBM dataset
+The notebooks should be run in the order of: data_preparation, training, evaluate, ensembling
+
+The notebooks also have dataset paths that should be replaced with your own local paths to the UPENN-GBM dataset
+
+**Note**: The notebooks may not run as is. Likely problems are related to the fact that not all patients in the UPENN-GBM dataset have all of the modalitites available. For example, if you try to use a patient list built from the strcutural modalities to run with a DSC derivative, it will fail as there are many patients without the DSC derivative.
